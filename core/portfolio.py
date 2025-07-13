@@ -1,53 +1,60 @@
-"""Minimal long-only portfolio simulator."""
+"""Simple long-only portfolio simulator."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List
 
 from core.types import MarketData, Signal
 
 
-@dataclass
+@dataclass(slots=True)
 class Trade:
-    """Record of a completed round-trip trade."""
+    """Round-trip trade record."""
     entry_price: float
     exit_price: float
     profit: float
 
 
 class Portfolio:
-    """Tracks cash, position, and realised PnL."""
+    """Tracks cash, position, and realised PnL (long-only, 1 unit)."""
 
     def __init__(self, starting_cash: float = 10_000.0) -> None:
-        self.cash = starting_cash
-        self.units = 0.0
-        self.entry_price = 0.0
-        self.trades: list[Trade] = []
+        self._cash: float = starting_cash
+        self._units: int = 0
+        self._entry_price: float = 0.0
+        self.trades: List[Trade] = []
 
-    def execute(self, signal: Signal, tick: MarketData) -> None:
-        """Act on strategy signal."""
-        if signal == Signal.BUY and self.units == 0:
-            self.units = 1.0
-            self.entry_price = tick.price
-            self.cash -= tick.price
-        elif signal == Signal.SELL and self.units == 1:
-            profit = tick.price - self.entry_price
-            self.cash += tick.price
+    # --------------------------------------------------------------------- api
+    def execute(self, signal: Signal, bar: MarketData) -> None:
+        """Update portfolio state in response to a strategy signal."""
+        price = bar.price
+        if price is None:
+            return
+
+        if signal is Signal.BUY and self._units == 0:
+            self._units = 1
+            self._entry_price = price
+            self._cash -= price
+        elif signal is Signal.SELL and self._units == 1:
+            self._units = 0
+            self._cash += price
             self.trades.append(
-                Trade(self.entry_price, tick.price, profit)
+                Trade(
+                    entry_price=self._entry_price,
+                    exit_price=price,
+                    profit=price - self._entry_price,
+                )
             )
-            self.units = 0.0
-            self.entry_price = 0.0
-        # HOLD or mismatched signal → no action
+            self._entry_price = 0.0
 
-    # --- Reporting helpers ----------------------------------------------------
-
+    # ------------------------------------------------------------------ report
     @property
     def realised_pnl(self) -> float:
         return sum(t.profit for t in self.trades)
 
     def summary(self) -> str:
         return (
-            f"Cash: {self.cash:.2f}, "
-            f"Open units: {self.units}, "
+            f"Cash: {self._cash:.2f} | "
+            f"Open units: {self._units} | "
             f"Realised PnL: {self.realised_pnl:.2f}"
         )

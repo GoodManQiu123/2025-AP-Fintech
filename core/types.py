@@ -1,26 +1,37 @@
-"""Common type aliases and enums used across the codebase."""
+"""Common primitive aliases, signals and market-data container."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import dataclasses
 from enum import Enum, auto
-from typing import NewType
+from typing import NewType, Optional
 
-# --- Trading signal -----------------------------------------------------------
+# ──────────────────────────────────────────────────────────── primitives ─────
+Asset = NewType("Asset", str)          # e.g. "AAPL", "BTCUSDT"
+Timestamp = NewType("Timestamp", str)  # ISO-8601 string
+Price = NewType("Price", float)
+Volume = NewType("Volume", float | int)
 
-
+# ───────────────────────────────────────────────────────────── signal ─────────
 class Signal(Enum):
-    """Discrete trading signals output by any strategy."""
+    """Discrete trading signals."""
     BUY = auto()
     SELL = auto()
     HOLD = auto()
 
-
-Price = NewType("Price", float)
-Timestamp = NewType("Timestamp", str)  # ISO-8601 string for MVP
-
-
-@dataclass(slots=True, frozen=True)
+# ─────────────────────────────────────────────────────── market bar DTO ──────
+@dataclasses.dataclass(slots=True, frozen=True)
 class MarketData:
-    """Lightweight market tick fed into strategies."""
+    """Unified market bar used throughout the engine."""
+    asset: Asset
     time: Timestamp
-    price: Price
+    open: Optional[Price] = None
+    high: Optional[Price] = None
+    low: Optional[Price] = None
+    close: Optional[Price] = None
+    adj_close: Optional[Price] = None
+    volume: Optional[Volume] = None
+
+    @property
+    def price(self) -> Price:
+        """Preferred price value for simple strategies."""
+        return self.close or self.adj_close  # type: ignore[return-value]
