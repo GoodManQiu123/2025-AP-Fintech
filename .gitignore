@@ -1,0 +1,63 @@
+# ------------------------------------------------------------------------------
+# Python / PyCharm / Virtual‑env Git ignore
+# ------------------------------------------------------------------------------
+
+# -- IDE & tooling -------------------------------------------------------------
+.idea/                 # JetBrains PyCharm project settings
+.vscode/               # VS Code settings (if occasionally used)
+*.iml                  # IntelliJ module files
+
+# -- Byte‑code & interpreter artefacts -----------------------------------------
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+
+# -- Environments --------------------------------------------------------------
+env/
+venv/
+.venv/
+ENV/
+.conda/
+*.egg-info/
+pip-wheel-metadata/
+
+# -- Packaging / build ---------------------------------------------------------
+build/
+dist/
+.eggs/
+*.egg
+*.whl
+
+# -- Test & coverage -----------------------------------------------------------
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+nosetests.xml
+.cache/
+
+# -- MyPy & type checking ------------------------------------------------------
+.mypy_cache/
+.dmypy.json
+
+# -- Logs & runtime files ------------------------------------------------------
+*.log
+.DS_Store
+Thumbs.db
+
+# -- dotenv / secrets ----------------------------------------------------------
+.env
+.env.*
+*.secret
+secrets.yml
+
+# -- Jupyter notebooks checkpoints --------------------------------------------
+.ipynb_checkpoints/
+
+# -- MacOS & Windows noise -----------------------------------------------------
+*.swp
+._*
+.Spotlight-V100
+.Trashes

@@ -1,0 +1,62 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="DuplicatedCode" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <Languages>
+        <language minSize="281" name="Python" />
+      </Languages>
+    </inspection_tool>
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="PyChainedComparisonsInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoreConstantInTheMiddle" value="true" />
+    </inspection_tool>
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <value>
+          <list size="12">
+            <item index="0" class="java.lang.String" itemvalue="jose" />
+            <item index="1" class="java.lang.String" itemvalue="backports.zoneinfo" />
+            <item index="2" class="java.lang.String" itemvalue="fastapi" />
+            <item index="3" class="java.lang.String" itemvalue="uvicorn" />
+            <item index="4" class="java.lang.String" itemvalue="aiocache" />
+            <item index="5" class="java.lang.String" itemvalue="pydantic" />
+            <item index="6" class="java.lang.String" itemvalue="urllib3" />
+            <item index="7" class="java.lang.String" itemvalue="pulsar" />
+            <item index="8" class="java.lang.String" itemvalue="pyjq" />
+            <item index="9" class="java.lang.String" itemvalue="openai" />
+            <item index="10" class="java.lang.String" itemvalue="Requests" />
+            <item index="11" class="java.lang.String" itemvalue="numpy" />
+          </list>
+        </value>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N802" />
+          <option value="N803" />
+          <option value="N801" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="elasticsearch._sync.client.Elasticsearch.__await__" />
+          <option value="str.pop" />
+          <option value="str.__setitem__" />
+          <option value="routers.user.MovieRecord.__await__" />
+          <option value="pulsar.Client.__await__" />
+          <option value="motor.AsyncIOMotorClient" />
+          <option value="typing.Coroutine.__getitem__" />
+          <option value="random.random.sample" />
+          <option value="str.__pos__" />
+          <option value="s2605607.src.example.pyjq" />
+          <option value="type.*" />
+          <option value="str.*" />
+          <option value="TMP_DIR" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
