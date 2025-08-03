@@ -29,7 +29,7 @@ class ChatAgent:
         model: str = "gpt-4o-mini",
         api_key: str | None = DEFAULT_KEY,
         max_history: int = 20,
-        verbose: bool = False,
+        verbose: bool = True,
     ) -> None:
         """
         Args:
@@ -51,6 +51,7 @@ class ChatAgent:
 
         If verbose, prints user_msg and assistant reply to console.
         """
+        print(f"\n[USER] {user_msg}" if self._verbose else "")
         # Append user message
         self._messages.append(ChatMessage("user", user_msg))
         self._trim_history()

@@ -1,7 +1,8 @@
-"""LLM strategy with rich metrics and configurable history/trading window."""
+"""LLM strategy with separate observe() and robust JSON parsing."""
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from typing import Deque, Literal, Optional
 
@@ -10,72 +11,79 @@ from core.metrics import RollingWindow
 from core.strategy_base import Strategy
 from core.types import MarketData, Signal
 
+_JSON_RE = re.compile(r'"?signal"?\s*:\s*"?(\w+)"?', re.I)
+
 
 class AIStrategy(Strategy):
-    """Generate signals via OpenAI, with SMA/volatility/RSI context."""
+    """Generate BUY/SELL/HOLD via OpenAI with technical metrics context."""
 
     def __init__(
         self,
         *,
-        history_days: Optional[int] = None,   # None = entire CSV
-        trade_days: Optional[int] = None,     # None = until file end
+        history_days: Optional[int] = 60,   # days for history summary
         metrics_window: int = 20,
         rsi_window: int = 14,
-        verbose: bool = False,
+        verbose_llm: bool = False,
     ) -> None:
         self._history_days = history_days
-        self._trade_days = trade_days
-        self._observed_days = 0
-        self._traded_days = 0
-
         self._hist_prices: Deque[float] = deque()
-        self._holding = False
+        self._history_sent = False
 
+        self._holding = False
         self._metrics = RollingWindow(metrics_window)
         self._rsi = RollingWindow(rsi_window)
 
-        sys_msg = (
-            "You are an autonomous trading agent. "
-            'Reply strictly JSON: {"signal":"BUY|SELL|HOLD","comment":"..." }.'
+        sys_prompt = (
+            "You are an autonomous trading bot.\n"
+            'Reply STRICT JSON: {"signal":"BUY|SELL|HOLD"}'
         )
-        self._chat = ChatAgent(system_prompt=sys_msg, verbose=verbose)
+        self._chat = ChatAgent(system_prompt=sys_prompt, verbose=verbose_llm)
 
-        self._history_sent = False
-
-    # ---------------------------- helper ------------------------------------
-    def _maybe_send_history(self) -> None:
-        if self._history_sent:
+    # --------------------------- observe -----------------------------------
+    def observe(self, bar: MarketData) -> None:
+        """Collect historical prices; avoid OpenAI calls before entry date."""
+        if bar.price is None:
             return
-        if self._history_days is None or len(self._hist_prices) >= self._history_days:
+        self._hist_prices.append(bar.price)
+        if (
+            not self._history_sent
+            and self._history_days is not None
+            and len(self._hist_prices) >= self._history_days
+        ):
             stats = {
                 "period_days": len(self._hist_prices),
                 "min": min(self._hist_prices),
                 "max": max(self._hist_prices),
                 "mean": sum(self._hist_prices) / len(self._hist_prices),
             }
-            self._chat.send(
-                "Historical metrics for the asset:\n" + json.dumps(stats)
-            )
+            self._chat.send(f"Historical stats:\n{json.dumps(stats)}")
             self._history_sent = True
 
-    # ---------------------------- strategy API ------------------------------
+    # --------------------------- helpers -----------------------------------
+    @staticmethod
+    def _parse_signal(reply: str) -> Literal["BUY", "SELL", "HOLD"]:
+        try:
+            return json.loads(reply)["signal"].upper()  # type: ignore[return-value]
+        except Exception:
+            m = _JSON_RE.search(reply)
+            return m.group(1).upper() if m else "HOLD"  # type: ignore[return-value]
+
+    # --------------------------- main API ----------------------------------
     def generate_signal(self, bar: MarketData) -> Signal:
         if bar.price is None:
             return Signal.HOLD
 
-        self._observed_days += 1
-        self._hist_prices.append(bar.price)
+        # ensure at least one history message sent (if not limited by days)
+        if not self._history_sent and self._history_days is None:
+            stats = {
+                "period_bars": len(self._hist_prices),
+                "min": min(self._hist_prices, default=bar.price),
+                "max": max(self._hist_prices, default=bar.price),
+            }
+            self._chat.send(f"Historical stats:\n{json.dumps(stats)}")
+            self._history_sent = True
 
-        # send history once ready
-        self._maybe_send_history()
-        if not self._history_sent:
-            return Signal.HOLD
-
-        # stop trading if reached limit
-        if self._trade_days is not None and self._traded_days >= self._trade_days:
-            return Signal.HOLD
-
-        # metrics update
+        # update metrics windows
         self._metrics.push(bar.price)
         self._rsi.push(bar.price)
         if not (self._metrics.full and self._rsi.full):
@@ -91,30 +99,17 @@ class AIStrategy(Strategy):
             }
         )
         reply = self._chat.send(prompt)
-        try:
-            sig_text: Literal["BUY", "SELL", "HOLD"] = json.loads(reply)["signal"]
-        except Exception:
-            sig_text = "HOLD"
+        sig_text = self._parse_signal(reply)
+        signal = Signal[sig_text] if sig_text in Signal.__members__ else Signal.HOLD
 
-        signal = Signal[sig_text]
         if signal is Signal.BUY:
             self._holding = True
         elif signal is Signal.SELL:
             self._holding = False
-        self._traded_days += 1
         return signal
 
 
-# ----------------------------- factory --------------------------------------
-def build(
-    *,
-    history_days: Optional[int] = None,
-    trade_days: Optional[int] = None,
-    verbose: bool = False,
-) -> Strategy:
-    """Factory with optional overrides."""
-    return AIStrategy(
-        history_days=history_days,
-        trade_days=trade_days,
-        verbose=verbose,
-    )
+# --------------------------- factory ---------------------------------------
+def build(**kwargs) -> Strategy:
+    """Factory for dynamic import (accepts verbose_llm etc.)."""
+    return AIStrategy(**kwargs)
