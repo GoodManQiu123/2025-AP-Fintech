@@ -18,8 +18,6 @@ class ChatMessage:
         """Convert to the dict format expected by the OpenAI client."""
         return {"role": self.role, "content": self.content}
 
-DEFAULT_KEY = "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"
-
 class ChatAgent:
     """Stateful chat wrapper with optional verbose output."""
 
@@ -27,7 +25,7 @@ class ChatAgent:
         self,
         system_prompt: str,
         model: str = "gpt-4o-mini",
-        api_key: str | None = DEFAULT_KEY,
+        api_key: str | None = None,
         max_history: int = 20,
         verbose: bool = True,
     ) -> None:
@@ -51,7 +49,6 @@ class ChatAgent:
 
         If verbose, prints user_msg and assistant reply to console.
         """
-        print(f"\n[USER] {user_msg}" if self._verbose else "")
         # Append user message
         self._messages.append(ChatMessage("user", user_msg))
         self._trim_history()

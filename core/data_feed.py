@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterator
 
-from core.types import Asset, MarketData, Price, Timestamp, Volume
+from core.types import Asset, MarketData, Timestamp, Volume
 
 # ───────────────────────────────────────────────────────── helper consts ─────
 _OPTIONAL_ALIASES: dict[str, tuple[str, ...]] = {
