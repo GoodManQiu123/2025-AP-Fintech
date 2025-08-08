@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
-from typing import Deque, Literal, Optional
+from typing import Deque, Optional
 
 from core.llm.chat_agent import ChatAgent
 from core.metrics import RollingWindow
@@ -45,7 +45,7 @@ class AIStrategy(Strategy):
 
         # ---- Chat agent ----------------------------------------------------
         system_prompt = (
-            "You are a professional trading agent.\n"
+            "You are a professional trading agent (Chasing high risk and high profit).\n"
             "Always output STRICT JSON:\n"
             '{"signal":"BUY|SELL|HOLD","units": <positive integer>} '
             "When HOLD, units can be 0 (no action).\n"
