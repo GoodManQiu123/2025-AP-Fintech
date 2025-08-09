@@ -192,8 +192,10 @@ class Portfolio:
     ) -> None:
         """Write summary.log, trade_log.log, and trades.png into dst_dir."""
         dst_dir.mkdir(parents=True, exist_ok=True)
-        (dst_dir / "summary.log").write_text(self.summary(), encoding="utf-8")
-        (dst_dir / "trade_log.log").write_text(self.trade_logs(), encoding="utf-8")
+
+        # Write summary to trade.log
+        trade_output = self.summary() + "\n" + self.trade_logs()
+        (dst_dir / "trade.log").write_text(trade_output, encoding="utf-8")
         self._save_plot(
             price_csv,
             dst_file=dst_dir / "trades.png",

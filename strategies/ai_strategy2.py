@@ -96,7 +96,7 @@ class AIStrategy2(Strategy):
             "Rules:\n"
             "- Never add text before/after JSON. No markdown. No commentary.\n"
             "- Respect cash and position constraints. If BUY, units <= affordable and <= max limit. "
-            "If SELL, units <= current position_units.\n"
+            "If SELL, units must <= current position_units.\n"
             "- Use confluence: trend (short_sma vs long_sma), momentum (RSI), and deviation (zscore= (price-short_sma)/volatility).\n"
             "- Consider prior reasons and reflections to avoid repeating mistakes.\n"
             "- If signal is weak/ambiguous, HOLD with units=0 and give a concise reason.\n"
@@ -382,6 +382,11 @@ class AIStrategy2(Strategy):
         self._last_sig, self._last_units, self._last_price, self._last_time = "HOLD", 0, bar.price, bar.time
         return Signal.HOLD
 
+    def export_chat_logs(self, dst_dir: Path) -> None:
+        """Dump dialog.json (messages only) and conversation_full.json (rich metadata)."""
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        self._chat.export_dialog_json(dst_dir / "dialog.json")
+        self._chat.export_full_json(dst_dir / "conversation_full.json")
 
 def build(**kwargs) -> Strategy:
     """Factory for dynamic import by the engine."""

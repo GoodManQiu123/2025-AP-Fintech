@@ -1,4 +1,4 @@
-"""Run back-test, print reports, and save logs/plot."""
+"""Run back-test, print reports, and save logs/plot & conversation JSONs."""
 from __future__ import annotations
 
 import argparse
@@ -12,7 +12,6 @@ from core.portfolio import Portfolio
 from core.types import Signal
 
 
-# ---------------------------- helpers ----------------------------
 def _load_strategy(dotted_path: str):
     mod = importlib.import_module(dotted_path)
     if not hasattr(mod, "build"):
@@ -30,7 +29,6 @@ def _parse_cli() -> argparse.Namespace:
     return p.parse_args()
 
 
-# ----------------------------- main ------------------------------
 def run() -> None:
     args = _parse_cli()
     csv_path = Path(args.data_dir) / f"{args.asset.upper()}.csv"
@@ -46,6 +44,7 @@ def run() -> None:
     for bar in feed.stream():
         bar_dt = dt.datetime.fromisoformat(bar.time)
 
+        # warm-up phase before entry date (if strategy supports observe)
         if entry_dt and bar_dt < entry_dt:
             if hasattr(strategy, "observe"):
                 strategy.observe(bar)
@@ -56,14 +55,22 @@ def run() -> None:
             units = getattr(strategy, "last_units", 1)
             portfolio.execute(sig, bar, units=units)
 
-    # ------------- console output -------------
+    # console output
     print(portfolio.summary())
     print(portfolio.trade_logs())
 
-    # ------------- persistent logs ------------
+    # persistent logs
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = Path("logs") / f"{args.asset.upper()}_{ts}"
     portfolio.export_logs(log_dir, csv_path, entry_dt, asset=args.asset.upper())
+
+    # conversation dumps (if provided by strategy)
+    if hasattr(strategy, "export_chat_logs"):
+        try:
+            strategy.export_chat_logs(log_dir)
+        except Exception as exc:
+            print(f"[warn] failed to export conversation logs: {exc}")
+
     print(f"\nLogs & chart saved to: {log_dir.resolve()}")
 
 
