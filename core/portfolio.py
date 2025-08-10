@@ -1,4 +1,4 @@
-"""Portfolio with analytics, plotting, and log export."""
+"""Portfolio with FIFO lot accounting, analytics, plotting, and log export."""
 from __future__ import annotations
 
 import datetime as dt
@@ -12,9 +12,18 @@ import pandas as pd
 from core.types import MarketData, Signal
 
 
-# ─────────────────────────────── data model ────────────────────────────────
+# ─────────────────────────────── data models ────────────────────────────────
+@dataclass(slots=True)
+class PositionLot:
+    """One FIFO lot created by a BUY transaction."""
+    time: dt.datetime
+    price: float
+    qty: int
+
+
 @dataclass(slots=True)
 class Trade:
+    """A realised trade generated when lots are consumed by SELLs."""
     entry_time: dt.datetime
     exit_time: dt.datetime
     entry_price: float
@@ -25,65 +34,80 @@ class Trade:
 
 # ───────────────────────────── portfolio class ─────────────────────────────
 class Portfolio:
-    """Long-only portfolio supporting variable unit size."""
+    """Long-only portfolio with FIFO lot-based accounting.
+
+    Supports:
+      • Multiple incremental BUYs (adds lots)
+      • Multiple incremental SELLs (consumes lots FIFO and creates multiple Trade records)
+      • Accurate realised PnL for partial closes
+    """
 
     def __init__(self, starting_cash: float = 10_000.0) -> None:
         self._start_cash = starting_cash
         self._cash = starting_cash
-        self._units = 0
-        self._entry_price = 0.0
-        self._entry_time: Optional[dt.datetime] = None
+        self._lots: List[PositionLot] = []
         self.trades: List[Trade] = []
+        # Equity curve of realised cash only (simple but robust)
         self._equity_curve: List[float] = [starting_cash]
 
-    # --------------------------- trade execution ---------------------------
+    # --------------------------- helper properties ---------------------------
+    @property
+    def open_units(self) -> int:
+        return sum(lot.qty for lot in self._lots)
+
+    @property
+    def cash(self) -> float:
+        return self._cash
+
+    # --------------------------- trade execution -----------------------------
     def execute(self, signal: Signal, bar: MarketData, units: int = 1) -> None:
-        """Execute BUY / SELL up to `units`, auto-adjusting for cash / inventory."""
+        """Execute BUY / SELL up to `units`, with automatic cash/position constraints."""
         price = bar.price
         if price is None or units <= 0:
             return
         ts = dt.datetime.fromisoformat(bar.time)
 
         if signal is Signal.BUY:
-            qty = min(units, int(self._cash // price))
+            affordable = int(self._cash // price)
+            qty = min(units, max(affordable, 0))
             if qty == 0:
                 return
-            if self._units == 0:
-                self._entry_price, self._entry_time = price, ts
-            else:  # 加仓，更新平均持仓成本
-                self._entry_price = (
-                    self._entry_price * self._units + price * qty
-                ) / (self._units + qty)
             self._cash -= price * qty
-            self._units += qty
+            self._lots.append(PositionLot(time=ts, price=price, qty=qty))
+            # realised equity after trade (cash only)
+            self._equity_curve.append(self._cash)
 
         elif signal is Signal.SELL:
-            qty = min(units, self._units)
-            if qty == 0:
+            if self.open_units <= 0:
                 return
-            self._cash += price * qty
-            self._units -= qty
-            if self._units == 0 and self._entry_time:
-                self._close_position(exit_price=price, exit_time=ts, qty=qty)
+            qty_to_sell = min(units, self.open_units)
+            if qty_to_sell <= 0:
+                return
 
-    def _close_position(self, *, exit_price: float, exit_time: dt.datetime, qty: int) -> None:
-        """Record closed trade and update equity curve."""
-        profit = (exit_price - self._entry_price) * qty
-        self.trades.append(
-            Trade(
-                entry_time=self._entry_time,  # type: ignore[arg-type]
-                exit_time=exit_time,
-                entry_price=self._entry_price,
-                exit_price=exit_price,
-                units=qty,
-                profit=profit,
-            )
-        )
-        self._entry_time = None
-        self._entry_price = 0.0
-        self._equity_curve.append(self._cash)
+            remaining = qty_to_sell
+            while remaining > 0 and self._lots:
+                lot = self._lots[0]
+                close_qty = min(remaining, lot.qty)
+                self._cash += price * close_qty
+                profit = (price - lot.price) * close_qty
+                self.trades.append(
+                    Trade(
+                        entry_time=lot.time,
+                        exit_time=ts,
+                        entry_price=lot.price,
+                        exit_price=price,
+                        units=close_qty,
+                        profit=profit,
+                    )
+                )
+                lot.qty -= close_qty
+                remaining -= close_qty
+                if lot.qty == 0:
+                    self._lots.pop(0)
 
-    # --------------------------- analytics ---------------------------------
+            self._equity_curve.append(self._cash)
+
+    # --------------------------- analytics -----------------------------------
     @property
     def realised_pnl(self) -> float:
         return sum(t.profit for t in self.trades)
@@ -96,15 +120,15 @@ class Portfolio:
             dd = max(dd, peak - eq)
         return dd
 
-    # --------------------------- text reports ------------------------------
+    # --------------------------- text reports --------------------------------
     def summary(self) -> str:
         total = len(self.trades)
-        roi = self.realised_pnl / self._start_cash * 100
+        roi = (self.realised_pnl / self._start_cash * 100.0) if self._start_cash else 0.0
         win = sum(t.profit > 0 for t in self.trades)
         loss = total - win
-        win_rate = win / total * 100 if total else 0
-        gross_profit = sum(max(t.profit, 0) for t in self.trades)
-        gross_loss = sum(min(t.profit, 0) for t in self.trades)
+        win_rate = (win / total * 100.0) if total else 0.0
+        gross_profit = sum(max(t.profit, 0.0) for t in self.trades)
+        gross_loss = sum(min(t.profit, 0.0) for t in self.trades)
         max_gain = max((t.profit for t in self.trades), default=0.0)
         max_loss = min((t.profit for t in self.trades), default=0.0)
 
@@ -112,7 +136,7 @@ class Portfolio:
             "========== Portfolio Summary ==========",
             f"Start cash       : {self._start_cash:,.2f}",
             f"End cash         : {self._cash:,.2f}",
-            f"Open units       : {self._units}",
+            f"Open units       : {self.open_units}",
             f"Realised PnL     : {self.realised_pnl:,.2f}",
             f"ROI %            : {roi:,.2f} %",
             "",
@@ -140,7 +164,7 @@ class Portfolio:
         )
         return f"{header}\n{body}"
 
-    # --------------------------- plotting & export -------------------------
+    # --------------------------- plotting & export ---------------------------
     def _save_plot(
         self,
         price_csv: Path,
@@ -156,24 +180,16 @@ class Portfolio:
         plt.figure(figsize=(13, 6))
         plt.plot(df["close"], label="Close", linewidth=1.3, color="#1f77b4")
 
-        plt.scatter(
-            [t.entry_time for t in self.trades],
-            [t.entry_price for t in self.trades],
-            marker="^",
-            s=90,
-            color="#2ca02c",
-            label="Buy",
-            zorder=3,
-        )
-        plt.scatter(
-            [t.exit_time for t in self.trades],
-            [t.exit_price for t in self.trades],
-            marker="v",
-            s=90,
-            color="#d62728",
-            label="Sell",
-            zorder=3,
-        )
+        # Mark trade points
+        buy_times = [t.entry_time for t in self.trades]
+        buy_prices = [t.entry_price for t in self.trades]
+        sell_times = [t.exit_time for t in self.trades]
+        sell_prices = [t.exit_price for t in self.trades]
+
+        if buy_times:
+            plt.scatter(buy_times, buy_prices, marker="^", s=90, color="#2ca02c", label="Buy", zorder=3)
+        if sell_times:
+            plt.scatter(sell_times, sell_prices, marker="v", s=90, color="#d62728", label="Sell", zorder=3)
 
         plt.title(title, fontsize=14, pad=10)
         plt.xlabel("Date")
@@ -190,12 +206,11 @@ class Portfolio:
         entry_dt: Optional[dt.datetime],
         asset: str,
     ) -> None:
-        """Write summary.log, trade_log.log, and trades.png into dst_dir."""
+        """Write summary.log, trade_log.log (includes summary), and trades.png."""
         dst_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write summary to trade.log
-        trade_output = self.summary() + "\n" + self.trade_logs()
-        (dst_dir / "trade.log").write_text(trade_output, encoding="utf-8")
+        # 合并 summary 到 trade_log
+        combined = f"{self.summary()}\n{self.trade_logs()}"
+        (dst_dir / "trade.log").write_text(combined, encoding="utf-8")
         self._save_plot(
             price_csv,
             dst_file=dst_dir / "trades.png",

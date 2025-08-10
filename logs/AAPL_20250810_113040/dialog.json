@@ -1,0 +1,86 @@
+[
+  {
+    "role": "system",
+    "content": "You are an elite trading agent. Your output MUST be EXACTLY ONE LINE of STRICT JSON:\n{\"signal\":\"BUY|SELL|HOLD\",\"units\":<int>,\"reason\":\"<short>\",\"feedback\":\"<one sentence>\",\"insight\":\"<short>\"\nNO extra text. NO markdown. NO multi-line. Only the JSON object.\n\nMetric definitions you will receive each turn:\n- price: latest close.\n- short_sma: mean of recent closes (short window).\n- long_sma: mean of longer closes (long window).\n- volatility: stddev of recent closes (short window).\n- rsi: relative strength index (0–100) over recent changes.\n- zscore: (price - short_sma) / volatility (stabilized to avoid division by 0).\n\nSTYLE=SWING\n- Objective: hold days–weeks; combine trend and mean reversion.\n- Entry bias: in uptrend (short_sma>long_sma) buy pullbacks (zscore<-1);\n  in downtrend (short_sma<long_sma) sell/trim on rebounds (zscore>1).\n- Risk: scale in/out; reduce trades when metrics conflict.\n\nHARD CONSTRAINTS (must hold in your JSON):\n- If portfolio.position_units==0 then SELL is invalid → output HOLD with units=0.\n- If SELL then units ≤ portfolio.position_units (no shorting).\n- If BUY then units ≤ portfolio.affordable_units AND ≤ portfolio.available_capacity.\n- For BUY/SELL, units must be >0.\n\nreason field: concise. feedback field: 1 short sentence that self-critiques the *previous* decision. insight field: a brief observation/analysis about the market/trend/strategy.\ngiven the new metrics and price (mention dates from the conversation if relevant). When there is no prior action, use 'initial'.\n"
+  },
+  {
+    "role": "user",
+    "content": "HISTORY_SUMMARY {\"period_days\":180,\"min\":166.88999938964844,\"max\":198.11000061035156,\"mean\":182.11327794392903,\"first_price\":192.75,\"last_price\":169.6699981689453,\"change_pct\":-11.974060612739137}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The price has declined significantly over the last 180 days, indicating a potential downtrend.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-06-30\",\"metrics\":{\"price\":205.1699981689453,\"short_sma\":200.225,\"long_sma\":201.33966674804688,\"volatility\":2.5954773707326613,\"rsi\":55.028160645804384,\"zscore\":1.9052364796959973},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":48,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The price is above both SMAs, but the high z-score suggests a potential overbought condition.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-01\",\"metrics\":{\"price\":207.82000732421875,\"short_sma\":201.16500091552734,\"long_sma\":201.2250005086263,\"volatility\":3.360879576134148,\"rsi\":69.13634719243392,\"zscore\":1.9801383113959494},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":48,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The RSI indicates overbought conditions, suggesting caution before entering a position.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-02\",\"metrics\":{\"price\":212.44000244140625,\"short_sma\":202.84500122070312,\"long_sma\":201.3470006306966,\"volatility\":4.258299220891561,\"rsi\":73.79584699741281,\"zscore\":2.2532472996799453},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":47,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The high z-score and RSI suggest the market is overbought, indicating a potential pullback.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-03\",\"metrics\":{\"price\":213.5500030517578,\"short_sma\":204.54200134277343,\"long_sma\":201.57000071207682,\"volatility\":4.773676520816834,\"rsi\":82.6585387461445,\"zscore\":1.8870155256022672},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":46,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The RSI is extremely high, indicating strong overbought conditions, warranting caution.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-07\",\"metrics\":{\"price\":209.9499969482422,\"short_sma\":205.43700103759767,\"long_sma\":201.83200073242188,\"volatility\":4.863849028014594,\"rsi\":70.72995287936283,\"zscore\":0.9278651299928832},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":47,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The price is still above the short SMA, but the declining RSI suggests weakening momentum.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-08\",\"metrics\":{\"price\":210.00999450683594,\"short_sma\":206.28800048828126,\"long_sma\":202.12033386230468,\"volatility\":4.845003252033979,\"rsi\":78.63690158353292,\"zscore\":0.7682129040867316},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":47,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The RSI remains high, indicating potential overbought conditions, while the price is stabilizing.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-09\",\"metrics\":{\"price\":211.13999938964844,\"short_sma\":207.37200012207032,\"long_sma\":202.64933369954426,\"volatility\":4.5899432796136725,\"rsi\":78.7974649162517,\"zscore\":0.8209250175952643},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":47,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The price is holding above the short SMA, but the high RSI suggests caution due to overbought conditions.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-10\",\"metrics\":{\"price\":212.41000366210938,\"short_sma\":208.45700073242188,\"long_sma\":203.05600026448568,\"volatility\":4.36469512941812,\"rsi\":75.77948744821803,\"zscore\":0.9056767569043236},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":47,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The price remains above the short SMA, but the declining RSI indicates potential exhaustion in the uptrend.\"}"
+  },
+  {
+    "role": "user",
+    "content": "{\"current_time\":\"2025-07-11\",\"metrics\":{\"price\":211.16000366210938,\"short_sma\":209.4730010986328,\"long_sma\":203.41400044759115,\"volatility\":3.6315621046708513,\"rsi\":71.11014335789322,\"zscore\":0.46453909222887174},\"portfolio\":{\"cash\":10000.0,\"position_units\":0,\"position_value\":0.0,\"avg_cost\":0.0,\"affordable_units\":47,\"available_capacity\":10,\"max_units\":10}}"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"signal\":\"HOLD\",\"units\":0,\"reason\":\"initial\",\"feedback\":\"No previous action taken to critique.\",\"insight\":\"The price is still above the short SMA, but the RSI indicates a potential loss of upward momentum.\"}"
+  }
+]
