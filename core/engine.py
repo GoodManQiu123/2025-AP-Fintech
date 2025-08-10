@@ -48,12 +48,17 @@ def run() -> None:
         if entry_dt and bar_dt < entry_dt:
             if hasattr(strategy, "observe"):
                 strategy.observe(bar)
+            # 不在测试期内，不盯市、不统计暴露度
             continue
 
+        # --- 测试期：先做决策成交，再用本根bar价格盯市 ---
         sig = strategy.generate_signal(bar)
         if sig is not Signal.HOLD:
             units = getattr(strategy, "last_units", 1)
             portfolio.execute(sig, bar, units=units)
+
+        # mark-to-market with end-of-bar price (ensures open value = latest price)
+        portfolio.mark_from_bar(bar)
 
     # console output
     print(portfolio.summary())
