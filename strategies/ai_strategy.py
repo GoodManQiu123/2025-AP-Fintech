@@ -48,6 +48,7 @@ class AIStrategy(Strategy):
             "You are a professional trading agent (Chasing high risk and high profit).\n"
             "Always output STRICT JSON:\n"
             '{"signal":"BUY|SELL|HOLD","units": <positive integer>} '
+            "When BUY, units must be > 0 and <= max_units.\n"
             "When HOLD, units can be 0 (no action).\n"
             "When SELL, units must be <= current position_unit.\n"
             "Consider provided indicators and cash/position constraints."
