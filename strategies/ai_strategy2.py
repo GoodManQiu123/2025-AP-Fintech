@@ -1,23 +1,28 @@
-# strategies/ai_strategy2.py
-"""
-AIStrategy3 — JSON-native, LLM-driven trading with guardrails, scaling, and notes.
+"""AIStrategy3 — JSON-native, LLM-driven trading with guardrails and scaling.
 
-Key ideas
----------
-1) Stable trading principles, risk appetite, and JSON contract live in the *system* message.
-2) Each user turn includes only:
-   - current_time
-   - metrics (price/short_sma/long_sma/volatility/rsi/zscore, optional OHLCV)
-   - portfolio (cash, position_units, avg_cost, capacity, computed unrealized PnL)
-   - optional notes (hard, turn-specific constraints; programmatically generated)
-3) The assistant must reply ONE-LINE JSON:
-   {"signal":"BUY|SELL|HOLD","units":int,"reason":"...","feedback":"..."}
-4) If parsing fails, retry once with a stricter “JSON_ONLY …” prefix; still failing → raise.
-5) Strategy mirrors cash/units locally to inform prompts and to enforce hard limits
-   (no shorting; no sell when flat; no overbuy beyond cash/capacity).
-6) Scaling (multi-buy/multi-sell over consecutive bars) is supported and can be toggled.
+This module defines a strategy that delegates decision-making to a Large
+Language Model (LLM) via `ChatAgent`. The model receives a compact JSON
+payload that includes price-derived metrics and a mirrored portfolio state,
+and it must respond with a single-line JSON object specifying the trading
+signal and the number of units to act on. The local strategy enforces hard
+risk constraints (no shorting, no selling when flat, no overbuy beyond
+cash/capacity) and mirrors cash/position state after every trade.
 
-This file is self-contained and integrates seamlessly with the provided engine/portfolio.
+Key behavior:
+- System prompt: Embeds stable trading principles, risk appetite, JSON
+  contract, and (optionally) scaling guidance.
+- Per-turn payload: Includes current_time, metrics, portfolio (cash, units,
+  capacity, affordability, unrealized PnL), and optional notes (hard,
+  turn-specific constraints).
+- Strict JSON I/O: The assistant must reply with one-line JSON:
+  {"signal":"BUY|SELL|HOLD","units":int,"reason":"...","feedback":"...","insight":"..."}
+- Robustness: If parsing fails, the strategy retries once with a stricter
+  "JSON_ONLY ..." prefix; otherwise it raises.
+- Guardrails: Local enforcement of hard constraints, optional cooldown, and
+  RSI/z-score nudges in notes for safer behavior.
+- Scaling: Optional multi-step scaling in/out across consecutive bars.
+
+This file is self-contained and integrates with the provided engine/portfolio.
 """
 
 from __future__ import annotations
@@ -32,8 +37,9 @@ from core.metrics import RollingWindow
 from core.strategy_base import Strategy
 from core.types import MarketData, Signal
 
-
-# ────────────────────────────── Style guides ────────────────────────────────
+# -----------------------------------------------------------------------------
+# Style guides embedded in the system prompt.
+# -----------------------------------------------------------------------------
 _STYLE_GUIDES: Dict[str, str] = {
     "scalp": (
         "STYLE=SCALP\n"
@@ -73,12 +79,16 @@ _STYLE_GUIDES: Dict[str, str] = {
 }
 
 
-def _build_system_prompt(
-    style: str,
-    *,
-    enable_scaling: bool,
-) -> str:
-    """Compose the system message with style, metrics definitions, and hard rules."""
+def _build_system_prompt(style: str, *, enable_scaling: bool) -> str:
+    """Compose the system message containing style, metrics, and hard rules.
+
+    Args:
+        style: Strategy style key. Falls back to "swing" if unknown.
+        enable_scaling: Whether to allow multi-step scaling guidance.
+
+    Returns:
+        A system prompt string to initialize the ChatAgent.
+    """
     guide = _STYLE_GUIDES.get(style, _STYLE_GUIDES["swing"])
     scaling = (
         "- Scaling (optional): you may scale in/out across turns (partial BUY/SELL over time). "
@@ -89,7 +99,7 @@ def _build_system_prompt(
     )
     return (
         "You are an elite trading agent. Output MUST be ONE LINE of STRICT JSON:\n"
-        '{"signal":"BUY|SELL|HOLD","units":<int>,"reason":"<short>","feedback":"<1 short sentence>", '
+        '{"signal":"BUY|SELL|HOLD","units":<int>,"reason":"<short>","feedback":"<1 short sentence>",'
         '"insight":"<short>"}\n'
         "\n"
         "Metrics each turn:\n"
@@ -107,14 +117,20 @@ def _build_system_prompt(
         "- BUY units ≤ portfolio.affordable_units AND ≤ portfolio.available_capacity.\n"
         "- Units must be strictly positive for BUY and SELL.\n"
         "The 'reason' explains THIS turn's decision; 'feedback' gives a brief\n"
-        "'reflection' about recent behavior/decision given current metrics.\n"
-        "'insight' about the market's key observation/signal/trend this turn.\n"
+        "reflection about recent behavior/decision given current metrics.\n"
+        "'insight' captures the market's key observation/signal/trend this turn.\n"
     )
 
 
-# ──────────────────────────────── Helpers ──────────────────────────────────
 def _to_int(value: object) -> int:
-    """Robust integer conversion from JSON values."""
+    """Robust integer conversion from JSON values.
+
+    Args:
+        value: Any JSON-serializable value.
+
+    Returns:
+        Integer value parsed from `value`. Returns 0 on failure.
+    """
     try:
         return int(value)  # type: ignore[arg-type]
     except Exception:
@@ -124,10 +140,41 @@ def _to_int(value: object) -> int:
             return 0
 
 
-# ────────────────────────────── Strategy class ─────────────────────────────
 class AIStrategy3(Strategy):
-    """LLM trading strategy with JSON-only I/O, retry-once, scaling, and notes."""
+    """LLM strategy with JSON-only I/O, retry-once, scaling, and hard guardrails.
 
+    This class mirrors cash/position locally to inform prompts and enforce
+    limits. It can optionally provide a one-time history summary before
+    trading and supports a cooldown period after trades.
+
+    Args:
+        style: Strategy style key; choices include "scalp", "swing", "invest",
+            "free_high", and "conservative". Unknown values fall back to "swing".
+        enable_scaling: If True, allows multi-step scaling in/out behavior.
+        short_win: Window length for short moving average and volatility.
+        long_win: Window length for long moving average.
+        rsi_win: Window length for RSI-like metric.
+        start_cash: Initial cash balance.
+        max_units: Maximum total units allowed (position cap).
+        history_days: If set, number of prices to accumulate before sending a
+            one-time history summary to the LLM. If None, history accumulates
+            continuously but no summary is sent.
+        cooldown_bars_after_trade: Number of bars to block new BUYs after any
+            trade (SELL/HOLD still allowed).
+        model: Model name forwarded to ChatAgent.
+        temperature: LLM sampling temperature.
+        top_p: Nucleus sampling parameter.
+        frequency_penalty: LLM frequency penalty.
+        presence_penalty: LLM presence penalty.
+        max_tokens: Maximum reply tokens expected from the LLM.
+        json_mode: Whether to request JSON-mode behavior from the ChatAgent.
+        max_history: Maximum conversation messages to retain.
+        verbose_llm: Whether ChatAgent logs additional details.
+        retry_once_on_parse_error: Whether to retry once with "JSON_ONLY ..." on
+            JSON parsing failures.
+    """
+
+    # ------------------------------------------------------------------ init
     def __init__(
         self,
         *,
@@ -157,13 +204,16 @@ class AIStrategy3(Strategy):
         verbose_llm: bool = True,
         retry_once_on_parse_error: bool = True,
     ) -> None:
+        # Strategy style & scaling mode.
         self._style = style if style in _STYLE_GUIDES else "swing"
         self._enable_scaling = bool(enable_scaling)
 
         # Build system prompt.
-        system_prompt = _build_system_prompt(self._style, enable_scaling=self._enable_scaling)
+        system_prompt = _build_system_prompt(
+            self._style, enable_scaling=self._enable_scaling
+        )
 
-        # ChatAgent (supports JSON mode & hyperparams).
+        # Chat agent (supports JSON mode & hyperparameters).
         self._chat = ChatAgent(
             system_prompt=system_prompt,
             model=model,
@@ -177,45 +227,67 @@ class AIStrategy3(Strategy):
             max_tokens=max_tokens,
         )
 
-        # Indicators
+        # Indicators.
         self._short = RollingWindow(short_win)
         self._long = RollingWindow(long_win)
         self._rsi = RollingWindow(rsi_win)
 
-        # Prompt-side portfolio mirror
+        # Mirrored portfolio state for prompts and local enforcement.
         self._cash = float(start_cash)
         self._units = 0
         self._avg_cost = 0.0
         self._max_units = int(max_units)
 
-        # Warm-up state
+        # Warm-up state.
         self._history_days = history_days
         self._hist: Deque[float] = deque()
         self._history_sent = False
 
-        # Trade-cooldown state
+        # Trade cooldown state.
         self._cooldown_cfg = max(0, int(cooldown_bars_after_trade))
         self._cooldown_left = 0
 
-        # Engine consults this for execution sizing
+        # Engine consults this for execution sizing.
         self.last_units: int = 0
 
-        # Retry policy
+        # Retry policy on JSON parse errors.
         self._retry_once = bool(retry_once_on_parse_error)
 
-    # ───────────────────────────── Internal utils ──────────────────────────
+    # -------------------------------------------------------------- utilities
     @staticmethod
     def _zscore(price: float, short_sma: float, vol: float) -> float:
+        """Compute the z-score of `price` relative to `short_sma` and `vol`.
+
+        Uses a stabilized denominator to avoid division by zero.
+
+        Args:
+            price: Latest price.
+            short_sma: Short-term simple moving average.
+            vol: Standard deviation over the short window.
+
+        Returns:
+            Z-score as a float.
+        """
         vol = max(vol, 1e-12)
         return (price - short_sma) / vol
 
     def _affordable(self, price: float) -> int:
+        """Return the maximum whole units purchasable given current cash."""
         return int(self._cash // price)
 
     def _capacity(self) -> int:
+        """Return the remaining capacity before reaching `self._max_units`."""
         return max(self._max_units - self._units, 0)
 
     def _compute_metrics(self, price: float) -> Dict[str, float]:
+        """Compute per-turn metrics used by the LLM.
+
+        Args:
+            price: Latest price.
+
+        Returns:
+            A dictionary with: price, short_sma, long_sma, volatility, rsi, zscore.
+        """
         short_sma = self._short.sma()
         long_sma = self._long.sma()
         vol = max(self._short.std(), 1e-12)
@@ -231,14 +303,30 @@ class AIStrategy3(Strategy):
         }
 
     def _build_user_payload(self, bar: MarketData) -> str:
-        """Build the compact user JSON for one decision turn."""
+        """Build the compact user JSON string for one decision turn.
+
+        The payload includes metrics, a mirrored portfolio snapshot, optional
+        OHLCV fields, and turn-specific notes to reinforce hard constraints.
+
+        Args:
+            bar: Latest market data.
+
+        Returns:
+            A JSON string (compact separators) to send to the LLM.
+        """
         price = float(bar.price)  # type: ignore[arg-type]
         metrics = self._compute_metrics(price)
 
-        # Derived portfolio stats
+        # Derived portfolio stats.
         pos_val = self._units * price
-        unreal_pnl = (price - self._avg_cost) * self._units if self._units > 0 else 0.0
-        unreal_pct = (unreal_pnl / (self._avg_cost * self._units) * 100.0) if self._units > 0 else 0.0
+        unreal_pnl = (
+            (price - self._avg_cost) * self._units if self._units > 0 else 0.0
+        )
+        unreal_pct = (
+            (unreal_pnl / (self._avg_cost * self._units) * 100.0)
+            if self._units > 0
+            else 0.0
+        )
 
         payload: Dict[str, object] = {
             "current_time": bar.time,
@@ -256,7 +344,7 @@ class AIStrategy3(Strategy):
             },
         }
 
-        # Optional OHLCV fields if present
+        # Optional OHLCV fields if present.
         ohlcv: Dict[str, float] = {}
         if bar.open is not None:
             ohlcv["open"] = float(bar.open)  # type: ignore[arg-type]
@@ -270,36 +358,46 @@ class AIStrategy3(Strategy):
             try:
                 ohlcv["volume"] = float(bar.volume)  # type: ignore[arg-type]
             except Exception:
+                # Ignore non-numeric volume gracefully.
                 pass
         if ohlcv:
             payload["ohlcv"] = ohlcv
 
-        # Turn-specific, HARD notes
+        # Turn-specific, hard notes for the model.
         notes: list[str] = []
 
-        # Enforce SELL disallowed when flat (extra redundancy for the model).
+        # Disallow SELL when flat (redundant reinforcement).
         if self._units == 0:
-            notes.append("position_units=0: SELL disallowed; only BUY or HOLD permitted this turn.")
-
-        # Cooldown hint
-        if self._cooldown_left > 0:
             notes.append(
-                f"cooldown_bars_remaining={self._cooldown_left}: avoid new BUY; allow SELL/trim only if signals align."
+                "position_units=0: SELL disallowed; only BUY or HOLD permitted this turn."
             )
 
-        # Capacity & cash hints
+        # Cooldown hint.
+        if self._cooldown_left > 0:
+            notes.append(
+                f"cooldown_bars_remaining={self._cooldown_left}: "
+                "avoid new BUY; allow SELL/trim only if signals align."
+            )
+
+        # Capacity & cash hints.
         affordable = self._affordable(price)
         capacity = self._capacity()
         if affordable <= 0:
             notes.append("affordable_units=0: only HOLD or SELL.")
         if capacity <= 0:
-            notes.append("available_capacity=0: position at max_units; do not BUY more.")
+            notes.append(
+                "available_capacity=0: position at max_units; do not BUY more."
+            )
 
-        # Extreme RSI / zscore nudges (risk-aware guardrails)
+        # Extreme RSI / z-score nudges (risk-aware guidance).
         if metrics["rsi"] >= 80:
-            notes.append("RSI very high: be cautious with new BUY; consider partial profit-taking.")
+            notes.append(
+                "RSI very high: be cautious with new BUY; consider partial profit-taking."
+            )
         if metrics["rsi"] <= 20:
-            notes.append("RSI very low: avoid panic SELL; consider mean-reversion entries.")
+            notes.append(
+                "RSI very low: avoid panic SELL; consider mean-reversion entries."
+            )
         if abs(metrics["zscore"]) >= 2.0:
             notes.append("abs(zscore)≥2: extreme deviation; act carefully.")
 
@@ -309,9 +407,19 @@ class AIStrategy3(Strategy):
         return json.dumps(payload, separators=(",", ":"))
 
     def _ask_once(self, user_payload: str) -> Dict[str, object]:
-        """Send one request to the LLM and parse the reply as JSON."""
+        """Send one request to the LLM and parse the reply as JSON.
+
+        Args:
+            user_payload: The compact JSON string to send to the LLM.
+
+        Returns:
+            A dict with keys: signal, units, reason, feedback.
+
+        Raises:
+            Exception: If the LLM reply is not valid JSON.
+        """
         reply = self._chat.send(user_payload)
-        obj = json.loads(reply)  # Let this raise if malformed (we handle outside).
+        obj = json.loads(reply)  # Let this raise if malformed (handled by caller).
         return {
             "signal": str(obj.get("signal", "HOLD")).upper(),
             "units": _to_int(obj.get("units", 0)),
@@ -320,7 +428,17 @@ class AIStrategy3(Strategy):
         }
 
     def _decide_with_retry(self, user_payload: str) -> Dict[str, object]:
-        """Retry once with a strict prefix when JSON parsing fails."""
+        """Retry once with a strict prefix when JSON parsing fails.
+
+        Args:
+            user_payload: The compact JSON string for the LLM.
+
+        Returns:
+            Parsed decision dict with keys: signal, units, reason, feedback.
+
+        Raises:
+            Exception: If both attempts fail parsing as valid JSON.
+        """
         try:
             return self._ask_once(user_payload)
         except Exception:
@@ -329,9 +447,17 @@ class AIStrategy3(Strategy):
             strict = "JSON_ONLY Strictly output the JSON object only. " + user_payload
             return self._ask_once(strict)
 
-    # ───────────────────────────── Strategy hooks ──────────────────────────
+    # ---------------------------------------------------------------- lifecycle
     def observe(self, bar: MarketData) -> None:
-        """Warm up metrics and emit a one-time history summary before entry date."""
+        """Warm up metrics and emit a one-time history summary before trading.
+
+        Accumulates prices for history and pushes values to rolling indicators.
+        When `history_days` observations have accumulated (and only once),
+        sends a compact summary to the LLM for additional context.
+
+        Args:
+            bar: Latest market data (only `price` is required here).
+        """
         if bar.price is None:
             return
 
@@ -357,42 +483,52 @@ class AIStrategy3(Strategy):
                 "last_price": last,
                 "change_pct": ((last - first) / first * 100.0) if first else 0.0,
             }
-            self._chat.send("HISTORY_SUMMARY " + json.dumps(stats, separators=(",", ":")))
+            self._chat.send(
+                "HISTORY_SUMMARY " + json.dumps(stats, separators=(",", ":"))
+            )
             self._history_sent = True
 
     def generate_signal(self, bar: MarketData) -> Signal:
-        """Main loop: build user JSON, call LLM, enforce constraints, mirror state."""
+        """Main loop: build user JSON, call LLM, enforce constraints, mirror state.
+
+        Args:
+            bar: Latest market data tick/candle.
+
+        Returns:
+            A `Signal` value: BUY, SELL, or HOLD.
+        """
         if bar.price is None:
             self.last_units = 0
             return Signal.HOLD
 
         price = float(bar.price)
 
-        # Keep warming if history_days=None
+        # If history_days is None, keep warming indicators via observe().
         if not self._history_sent and self._history_days is None:
             self.observe(bar)
 
-        # Update indicators
+        # Update indicators.
         self._short.push(price)
         self._long.push(price)
         self._rsi.push(price)
 
-        # Require fully-initialized windows
+        # Require fully initialized windows.
         if not (self._short.full and self._long.full and self._rsi.full):
             self.last_units = 0
-            # Still tick down cooldown
+            # Still tick down cooldown while warming up.
             if self._cooldown_left > 0:
                 self._cooldown_left -= 1
             return Signal.HOLD
 
-        # Build turn payload and ask the model
+        # Build turn payload and ask the model.
         payload = self._build_user_payload(bar)
         decision = self._decide_with_retry(payload)
 
         sig_text = str(decision["signal"]).upper()
         req_units = _to_int(decision["units"])
 
-        # ──────────────── Hard constraints (redundant safety) ───────────────
+        # ------------------------ Hard constraints -------------------------
+        # SELL is invalid when flat.
         if self._units == 0 and sig_text == "SELL":
             sig_text, req_units = "HOLD", 0
 
@@ -413,9 +549,10 @@ class AIStrategy3(Strategy):
                 req_units = min(max(req_units, 1), self._units)
 
         elif sig_text != "HOLD":
+            # Any unknown signal defaults to HOLD.
             sig_text, req_units = "HOLD", 0
 
-        # ─────────────── Mirror cash/position & cooldown updates ────────────
+        # ---------------- Mirror cash/position & cooldown updates ----------
         if sig_text == "BUY" and req_units > 0:
             cost = req_units * price
             self._cash -= cost
@@ -427,7 +564,7 @@ class AIStrategy3(Strategy):
             self._units += req_units
             self.last_units = req_units
 
-            # Reset cooldown after a trade
+            # Reset cooldown after a trade.
             self._cooldown_left = self._cooldown_cfg
             return Signal.BUY
 
@@ -438,7 +575,7 @@ class AIStrategy3(Strategy):
                 self._avg_cost = 0.0
             self.last_units = req_units
 
-            # Reset cooldown after a trade
+            # Reset cooldown after a trade.
             self._cooldown_left = self._cooldown_cfg
             return Signal.SELL
 
@@ -448,14 +585,28 @@ class AIStrategy3(Strategy):
             self._cooldown_left -= 1
         return Signal.HOLD
 
-    # ─────────────────────────── Conversation dumps ─────────────────────────
+    # ------------------------------------------------------------ export logs
     def export_chat_logs(self, dst_dir: Path) -> None:
-        """Export dialog.json (messages only) and conversation_full.json (metadata)."""
+        """Export dialog.json (messages only) and conversation_full.json (metadata).
+
+        Args:
+            dst_dir: Destination directory. It will be created if it doesn't exist.
+        """
         dst_dir.mkdir(parents=True, exist_ok=True)
         self._chat.export_dialog_json(dst_dir / "dialog.json")
         self._chat.export_full_json(dst_dir / "conversation_full.json")
 
 
-# Factory for engine dynamic import
+# -----------------------------------------------------------------------------
+# Factory for engine dynamic import.
+# -----------------------------------------------------------------------------
 def build(**kwargs) -> Strategy:
+    """Factory function returning a configured strategy instance.
+
+    Args:
+        **kwargs: Keyword arguments forwarded to `AIStrategy3`.
+
+    Returns:
+        A `Strategy` instance wrapping `AIStrategy3`.
+    """
     return AIStrategy3(**kwargs)

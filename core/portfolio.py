@@ -1,4 +1,16 @@
-"""Portfolio with FIFO lots, rich analytics, mark-to-market, and export."""
+"""Portfolio with FIFO lots, rich analytics, mark-to-market, and export.
+
+This module implements a long-only portfolio with:
+
+* FIFO lot-based accounting (multiple incremental BUYs add lots; SELLs consume
+  lots in FIFO order and create realized-trade records).
+* Correct per-lot realized PnL for partial closes.
+* Mark-to-market on each bar (tracked equity curve and exposure metrics).
+* Text summaries, trade logs, and basic plot/export helpers.
+
+Behavior is intentionally preserved from the original implementation; changes
+are limited to style, formatting, and documentation.
+"""
 from __future__ import annotations
 
 import datetime as dt
@@ -13,10 +25,16 @@ import pandas as pd
 from core.types import MarketData, Signal
 
 
-# ─────────────────────────────── data models ────────────────────────────────
+# ───────────────────────────────────── data models ─────────────────────────────────────
 @dataclass(slots=True)
 class PositionLot:
-    """One FIFO lot created by a BUY transaction."""
+    """One FIFO lot created by a BUY transaction.
+
+    Attributes:
+        time: Datetime when the lot was opened (BUY time).
+        price: Entry price of the lot.
+        qty: Number of units in the lot.
+    """
     time: dt.datetime
     price: float
     qty: int
@@ -24,81 +42,118 @@ class PositionLot:
 
 @dataclass(slots=True)
 class Trade:
-    """A realised trade generated when lots are consumed by SELLs."""
+    """A realized trade generated when lots are consumed by SELLs.
+
+    Attributes:
+        entry_time: Datetime when the lot (or part-lot) was opened.
+        exit_time: Datetime when the lot portion was closed.
+        entry_price: Price at entry.
+        exit_price: Price at exit.
+        units: Number of units closed in this trade record.
+        profit: Absolute profit in quote currency for this close.
+    """
     entry_time: dt.datetime
     exit_time: dt.datetime
     entry_price: float
     exit_price: float
     units: int
-    profit: float  # absolute profit in quote currency
+    profit: float
 
 
-# ───────────────────────────── portfolio class ─────────────────────────────
+# ───────────────────────────────────── portfolio ──────────────────────────────────────
 class Portfolio:
-    """Long-only portfolio with FIFO lot-based accounting and rich analytics.
+    """Long-only portfolio with FIFO lot-based accounting and analytics.
 
     Features:
-      • Multiple incremental BUYs (adds lots)
-      • Multiple incremental SELLs (consumes lots FIFO, each partial close = one Trade)
-      • Correct realised PnL for partial closes
-      • Mark-to-market on each bar via `mark_from_bar` (last price/time, equity)
+        * Multiple incremental BUYs (adds lots).
+        * Multiple incremental SELLs (consumes lots FIFO; each partial close
+          becomes a separate :class:`Trade`).
+        * Mark-to-market each bar via :meth:`mark_from_bar`.
+        * Exposure tracking (time in market).
+
+    Notes:
+        * This implementation preserves original behavior. Cash-only equity is
+          appended after each trade; marked equity is updated per bar.
     """
 
-    # ------------------------------- init -----------------------------------
+    # --------------------------------- init ---------------------------------
     def __init__(self, starting_cash: float = 10_000.0) -> None:
+        """Initialize a new portfolio.
+
+        Args:
+            starting_cash: Initial cash balance.
+        """
         self._start_cash = float(starting_cash)
         self._cash = float(starting_cash)
 
-        # Open position lots (FIFO) and realised trade records
+        # Open position lots (FIFO) and realized trade records.
         self._lots: List[PositionLot] = []
         self.trades: List[Trade] = []
 
-        # Curves for risk
-        self._equity_curve_cash: List[float] = [self._cash]  # cash-only (after trades)
-        self._equity_curve_marked: List[float] = [self._cash]  # marked equity each bar
+        # Equity curves (cash-only after trades, and marked equity per bar).
+        self._equity_curve_cash: List[float] = [self._cash]
+        self._equity_curve_marked: List[float] = [self._cash]
 
-        # Last mark (price/time) for mark-to-market
+        # Last mark (price/time) for mark-to-market.
         self._last_mark_price: Optional[float] = None
         self._last_mark_time: Optional[dt.datetime] = None
 
-        # Exposure stats (time in market)
+        # Exposure stats (time in market).
         self._bars_total: int = 0
         self._bars_in_market: int = 0
 
-    # --------------------------- helper properties ---------------------------
+    # ------------------------------ properties ------------------------------
     @property
     def open_units(self) -> int:
+        """Return the total open units across all FIFO lots."""
         return sum(lot.qty for lot in self._lots)
 
     @property
     def cash(self) -> float:
+        """Return the current cash balance."""
         return self._cash
 
     def _weighted_avg_cost(self) -> float:
-        """Average cost for current open position (0 if flat)."""
+        """Return the average cost of the current open position.
+
+        Returns:
+            Average entry price across all open lots (0.0 if flat).
+        """
         units = self.open_units
         if units <= 0:
             return 0.0
         total_cost = sum(l.price * l.qty for l in self._lots)
         return total_cost / units
 
-    # --------------------------- trade execution -----------------------------
+    # ---------------------------- trade execution ---------------------------
     def execute(self, signal: Signal, bar: MarketData, units: int = 1) -> None:
-        """Execute BUY / SELL up to `units`, with automatic cash/position constraints.
+        """Execute BUY/SELL up to ``units`` with cash/position constraints.
 
         BUY:
-          - Spend available cash, add FIFO lot(s).
+            * Spends available cash (no leverage).
+            * Adds a single FIFO lot with the executed quantity.
+
         SELL:
-          - Consume lots FIFO, create one Trade per consumed lot (or part-lot).
+            * Consumes lots in FIFO order.
+            * Creates one :class:`Trade` per consumed lot (or partial lot).
 
         Notes:
-          - This method updates cash and lots.
-          - Equity curves: cash-equity is appended after each trade event.
-          - Marked-equity is updated in `mark_from_bar` (called per bar in engine).
+            * Updates cash and lots immediately.
+            * Appends to the cash-only equity curve after each trade.
+            * Marked equity is updated in :meth:`mark_from_bar` (per-bar call).
+
+        Args:
+            signal: Trading signal (BUY/SELL). HOLD is ignored.
+            bar: Latest market data bar. Uses ``bar.price`` and ``bar.time``.
+            units: Desired number of units to trade (must be positive).
+
+        Returns:
+            None. No-ops when price is missing or units is non-positive.
         """
         price = bar.price
         if price is None or units <= 0:
             return
+
         ts = dt.datetime.fromisoformat(bar.time)
 
         if signal is Signal.BUY:
@@ -106,14 +161,16 @@ class Portfolio:
             qty = min(units, max(affordable, 0))
             if qty == 0:
                 return
+
             self._cash -= price * qty
             self._lots.append(PositionLot(time=ts, price=price, qty=qty))
-            # cash equity after trade
+            # Update cash equity after trade.
             self._equity_curve_cash.append(self._cash)
 
         elif signal is Signal.SELL:
             if self.open_units <= 0:
                 return
+
             qty_to_sell = min(units, self.open_units)
             if qty_to_sell <= 0:
                 return
@@ -122,6 +179,7 @@ class Portfolio:
             while remaining > 0 and self._lots:
                 lot = self._lots[0]
                 close_qty = min(remaining, lot.qty)
+
                 self._cash += price * close_qty
                 profit = (price - lot.price) * close_qty
                 self.trades.append(
@@ -134,23 +192,34 @@ class Portfolio:
                         profit=profit,
                     )
                 )
+
                 lot.qty -= close_qty
                 remaining -= close_qty
                 if lot.qty == 0:
                     self._lots.pop(0)
 
-            # cash equity after trade
+            # Update cash equity after trade.
             self._equity_curve_cash.append(self._cash)
 
-    # ----------------------------- mark-to-market ----------------------------
+        # HOLD or any other signals are ignored by design.
+
+    # ----------------------------- mark-to-market ---------------------------
     def mark_from_bar(self, bar: MarketData) -> None:
-        """Mark-to-market with the bar's close (or adj_close). Also track exposure."""
+        """Mark-to-market with the bar's close (or ``adj_close``) and track exposure.
+
+        Args:
+            bar: Latest market data bar.
+
+        Returns:
+            None. No-ops when price is missing.
+        """
         price = bar.price
         if price is None:
             return
+
         ts = dt.datetime.fromisoformat(bar.time)
 
-        # bars counting used for exposure
+        # Exposure counting.
         self._bars_total += 1
         if self.open_units > 0:
             self._bars_in_market += 1
@@ -161,10 +230,12 @@ class Portfolio:
         equity = self._cash + self.open_units * self._last_mark_price
         self._equity_curve_marked.append(equity)
 
-    # ------------------------------ analytics --------------------------------
+    # -------------------------------- analytics -----------------------------
     @staticmethod
     def _max_drawdown(series: List[float]) -> float:
-        peak = dd = 0.0
+        """Return the maximum drawdown for a cumulative series."""
+        peak = 0.0
+        dd = 0.0
         for x in series:
             peak = max(peak, x)
             dd = max(dd, peak - x)
@@ -172,10 +243,11 @@ class Portfolio:
 
     @property
     def realised_pnl(self) -> float:
+        """Return the sum of realized profits across all trades."""
         return sum(t.profit for t in self.trades)
 
     def _trade_returns(self) -> List[float]:
-        """Per-trade percentage returns; empty if no trades."""
+        """Return per-trade percentage returns; empty if there are no trades."""
         returns: List[float] = []
         for t in self.trades:
             if t.entry_price > 0:
@@ -184,8 +256,11 @@ class Portfolio:
 
     @staticmethod
     def _consecutive_counts(vals: List[bool]) -> Tuple[int, int]:
-        """Return (max_consecutive_true, max_consecutive_false)."""
-        max_t = max_f = cur_t = cur_f = 0
+        """Return (max_consecutive_true, max_consecutive_false) for a boolean list."""
+        max_t = 0
+        max_f = 0
+        cur_t = 0
+        cur_f = 0
         for v in vals:
             if v:
                 cur_t += 1
@@ -198,7 +273,7 @@ class Portfolio:
         return max_t, max_f
 
     def _holding_days(self) -> Tuple[float, float]:
-        """Return (avg_days, median_days) for realised trades."""
+        """Return (avg_days, median_days) for realized trades."""
         if not self.trades:
             return 0.0, 0.0
         days = [(t.exit_time - t.entry_time).days for t in self.trades]
@@ -206,9 +281,10 @@ class Portfolio:
         med = float(median(days))
         return avg, med
 
-    # --------------------------- text reports --------------------------------
+    # ------------------------------- reporting ------------------------------
     def summary(self) -> str:
-        # basics
+        """Return a human-readable multi-line portfolio summary."""
+        # Basics
         start_cash = self._start_cash
         end_cash = self._cash
         open_units = self.open_units
@@ -217,15 +293,21 @@ class Portfolio:
         avg_cost = self._weighted_avg_cost()
 
         unreal = (mark_price - avg_cost) * open_units if open_units > 0 else 0.0
-        unreal_pct = (unreal / (avg_cost * open_units) * 100.0) if (open_units > 0 and avg_cost > 0) else 0.0
+        unreal_pct = (
+            (unreal / (avg_cost * open_units) * 100.0)
+            if (open_units > 0 and avg_cost > 0)
+            else 0.0
+        )
 
         total_equity = end_cash + open_value
-        equity_roi = ((total_equity - start_cash) / start_cash * 100.0) if start_cash > 0 else 0.0
+        equity_roi = (
+            (total_equity - start_cash) / start_cash * 100.0 if start_cash > 0 else 0.0
+        )
 
         realised = self.realised_pnl
         realised_roi = (realised / start_cash * 100.0) if start_cash > 0 else 0.0
 
-        # trade stats
+        # Trade stats
         total = len(self.trades)
         wins = sum(t.profit > 0 for t in self.trades)
         losses = sum(t.profit < 0 for t in self.trades)
@@ -234,7 +316,9 @@ class Portfolio:
 
         gross_profit = sum(max(t.profit, 0.0) for t in self.trades)
         gross_loss = sum(min(t.profit, 0.0) for t in self.trades)
-        profit_factor = (gross_profit / abs(gross_loss)) if gross_loss < 0 else float("inf")
+        profit_factor = (gross_profit / abs(gross_loss)) if gross_loss < 0 else float(
+            "inf"
+        )
 
         avg_win = (gross_profit / wins) if wins else 0.0
         avg_loss = (gross_loss / losses) if losses else 0.0
@@ -243,7 +327,9 @@ class Portfolio:
         best = max((t.profit for t in self.trades), default=0.0)
         worst = min((t.profit for t in self.trades), default=0.0)
 
-        max_wins, max_losses = self._consecutive_counts([t.profit > 0 for t in self.trades])
+        max_wins, max_losses = self._consecutive_counts(
+            [t.profit > 0 for t in self.trades]
+        )
         avg_days, med_days = self._holding_days()
 
         rets = self._trade_returns()
@@ -252,10 +338,22 @@ class Portfolio:
         ret_std = ret_var ** 0.5
         sharpe_like = (ret_mean / ret_std) if ret_std > 0 else 0.0
 
-        # drawdowns & exposure
-        dd_cash = self._max_drawdown(self._equity_curve_cash) if self._equity_curve_cash else 0.0
-        dd_marked = self._max_drawdown(self._equity_curve_marked) if self._equity_curve_marked else 0.0
-        exposure = (self._bars_in_market / self._bars_total * 100.0) if self._bars_total > 0 else 0.0
+        # Drawdowns & exposure
+        dd_cash = (
+            self._max_drawdown(self._equity_curve_cash)
+            if self._equity_curve_cash
+            else 0.0
+        )
+        dd_marked = (
+            self._max_drawdown(self._equity_curve_marked)
+            if self._equity_curve_marked
+            else 0.0
+        )
+        exposure = (
+            self._bars_in_market / self._bars_total * 100.0
+            if self._bars_total > 0
+            else 0.0
+        )
 
         lines = [
             "========== Portfolio Summary ==========",
@@ -281,7 +379,7 @@ class Portfolio:
             f"Best / Worst trade         : {best:,.2f} / {worst:,.2f}",
             f"Max consecutive wins/loss  : {max_wins} / {max_losses}",
             f"Avg / Median hold (days)   : {avg_days:,.2f} / {med_days:,.2f}",
-            f"Trade return mean / std    : {ret_mean*100:,.2f}% / {ret_std*100:,.2f}%",
+            f"Trade return mean / std    : {ret_mean * 100:,.2f}% / {ret_std * 100:,.2f}%",
             f"Sharpe-like (per trade)    : {sharpe_like:,.2f}",
             "",
             f"Max drawdown (cash only)   : {dd_cash:,.2f}",
@@ -292,9 +390,11 @@ class Portfolio:
         return "\n".join(lines)
 
     def trade_logs(self) -> str:
+        """Return a multi-line, human-readable trade log."""
         header = "\n----- Trade Log -----"
         if not self.trades:
             return f"{header}\nNo trades executed."
+
         body = "\n".join(
             f"{t.entry_time.date()} BUY {t.units}@{t.entry_price:.2f} → "
             f"{t.exit_time.date()} SELL @{t.exit_price:.2f}  PnL {t.profit:.2f}"
@@ -302,7 +402,7 @@ class Portfolio:
         )
         return f"{header}\n{body}"
 
-    # --------------------------- plotting & export ---------------------------
+    # ---------------------------- plotting & export --------------------------
     def _save_plot(
         self,
         price_csv: Path,
@@ -310,6 +410,14 @@ class Portfolio:
         entry_dt: Optional[dt.datetime],
         title: str,
     ) -> None:
+        """Save a simple price chart with BUY/SELL markers.
+
+        Args:
+            price_csv: Path to a CSV containing a 'time' column and 'close' price.
+            dst_file: Output PNG path.
+            entry_dt: If provided, plot data on/after this datetime only.
+            title: Chart title.
+        """
         df = pd.read_csv(price_csv, parse_dates=["time"]).set_index("time")
         if entry_dt:
             df = df[df.index >= entry_dt]
@@ -318,16 +426,20 @@ class Portfolio:
         plt.figure(figsize=(13, 6))
         plt.plot(df["close"], label="Close", linewidth=1.3, color="#1f77b4")
 
-        # Mark trade points
+        # Mark trade points.
         buy_times = [t.entry_time for t in self.trades]
         buy_prices = [t.entry_price for t in self.trades]
         sell_times = [t.exit_time for t in self.trades]
         sell_prices = [t.exit_price for t in self.trades]
 
         if buy_times:
-            plt.scatter(buy_times, buy_prices, marker="^", s=90, color="#2ca02c", label="Buy", zorder=3)
+            plt.scatter(
+                buy_times, buy_prices, marker="^", s=90, color="#2ca02c", label="Buy", zorder=3
+            )
         if sell_times:
-            plt.scatter(sell_times, sell_prices, marker="v", s=90, color="#d62728", label="Sell", zorder=3)
+            plt.scatter(
+                sell_times, sell_prices, marker="v", s=90, color="#d62728", label="Sell", zorder=3
+            )
 
         plt.title(title, fontsize=14, pad=10)
         plt.xlabel("Date")
@@ -344,12 +456,20 @@ class Portfolio:
         entry_dt: Optional[dt.datetime],
         asset: str,
     ) -> None:
-        """Write trade.log (summary + trade logs) and trades.png into dst_dir."""
+        """Write `trade.log` (summary + trade logs) and `trades.png` into `dst_dir`.
+
+        Args:
+            dst_dir: Output directory (created if missing).
+            price_csv: Path to the historical prices CSV used for plotting.
+            entry_dt: Optional start datetime for plotted/considered data.
+            asset: Asset symbol for labeling the chart.
+        """
         dst_dir.mkdir(parents=True, exist_ok=True)
         combined = f"{self.summary()}\n{self.trade_logs()}"
         (dst_dir / "trade.log").write_text(combined, encoding="utf-8")
+
         self._save_plot(
-            price_csv,
+            price_csv=price_csv,
             dst_file=dst_dir / "trades.png",
             entry_dt=entry_dt,
             title=f"{asset} Trade Overlay",

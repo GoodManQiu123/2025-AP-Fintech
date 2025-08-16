@@ -1,4 +1,20 @@
-"""Run back-test, print reports, and save logs/plot & conversation JSONs."""
+# engine.py
+"""Run backtests, print reports, and save logs/plots & conversation JSONs.
+
+This script:
+  1) Loads market data from CSV.
+  2) Dynamically imports a strategy via a dotted path and instantiates it
+     using the strategy's ``build()`` factory.
+  3) Streams bars to the strategy to obtain trading signals.
+  4) Executes trades through the Portfolio and marks positions to market.
+  5) Prints a console summary and exports logs (including strategy chat logs
+     if the strategy exposes ``export_chat_logs``).
+
+Note:
+    This file intentionally preserves the original behavior and I/O contract.
+    Comments and docstrings are in English; formatting follows the Google
+    Python Style Guide.
+"""
 from __future__ import annotations
 
 import argparse
@@ -6,30 +22,68 @@ import datetime as dt
 import importlib
 import sys
 from pathlib import Path
+from typing import Any
 
 from core.data_feed import CSVFeed
 from core.portfolio import Portfolio
 from core.types import Signal
 
 
-def _load_strategy(dotted_path: str):
-    mod = importlib.import_module(dotted_path)
+def _load_strategy(dotted_path: str) -> Any:
+    """Import a strategy module and return an instance via its build() factory.
+
+    Args:
+        dotted_path: Dotted import path to the strategy module
+            (e.g., "strategies.threshold_strategy").
+
+    Returns:
+        A strategy instance constructed by the module's ``build()`` function.
+
+    Raises:
+        AttributeError: If the module does not expose a ``build`` factory.
+        ModuleNotFoundError: If the module cannot be imported.
+    """
+    try:
+        mod = importlib.import_module(dotted_path)
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            f"Failed to import strategy module: {dotted_path}"
+        ) from exc
+
     if not hasattr(mod, "build"):
         raise AttributeError(f"{dotted_path} must expose build() factory")
+
     return mod.build()
 
 
 def _parse_cli() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run trading back-test.")
-    p.add_argument("--asset", default="AAPL")
-    p.add_argument("--data-dir", default="data")
-    p.add_argument("--strategy", default="strategies.threshold_strategy")
-    p.add_argument("--cash", type=float, default=10_000.0)
-    p.add_argument("--entry-date", help="YYYY-MM-DD funding date")
-    return p.parse_args()
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Run trading back-test.")
+    parser.add_argument("--asset", default="AAPL", help="Asset symbol (e.g., AAPL).")
+    parser.add_argument(
+        "--data-dir", default="data", help="Directory containing the CSV data files."
+    )
+    parser.add_argument(
+        "--strategy",
+        default="strategies.threshold_strategy",
+        help="Dotted path to the strategy module exposing build().",
+    )
+    parser.add_argument(
+        "--cash",
+        type=float,
+        default=10_000.0,
+        help="Starting cash balance for the backtest.",
+    )
+    parser.add_argument(
+        "--entry-date",
+        help="ISO date (YYYY-MM-DD). Bars strictly before this date are used "
+        "for warm-up (observe) only; trading starts on/after this date.",
+    )
+    return parser.parse_args()
 
 
 def run() -> None:
+    """Run the backtest loop and export summary and logs."""
     args = _parse_cli()
     csv_path = Path(args.data_dir) / f"{args.asset.upper()}.csv"
     if not csv_path.exists():
@@ -44,36 +98,35 @@ def run() -> None:
     for bar in feed.stream():
         bar_dt = dt.datetime.fromisoformat(bar.time)
 
-        # warm-up phase before entry date (if strategy supports observe)
+        # Warm-up phase before entry date (collect context, no trading/marking).
         if entry_dt and bar_dt < entry_dt:
             if hasattr(strategy, "observe"):
                 strategy.observe(bar)
-            # 不在测试期内，不盯市、不统计暴露度
             continue
 
-        # --- 测试期：先做决策成交，再用本根bar价格盯市 ---
+        # Test period: decide & execute first, then mark to market with this bar.
         sig = strategy.generate_signal(bar)
         if sig is not Signal.HOLD:
             units = getattr(strategy, "last_units", 1)
             portfolio.execute(sig, bar, units=units)
 
-        # mark-to-market with end-of-bar price (ensures open value = latest price)
+        # Mark-to-market with end-of-bar price (keeps open value synced to latest).
         portfolio.mark_from_bar(bar)
 
-    # console output
+    # Console outputs.
     print(portfolio.summary())
     print(portfolio.trade_logs())
 
-    # persistent logs
+    # Persistent logs.
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = Path("logs") / f"{args.asset.upper()}_{ts}"
     portfolio.export_logs(log_dir, csv_path, entry_dt, asset=args.asset.upper())
 
-    # conversation dumps (if provided by strategy)
+    # Conversation dumps (if provided by the strategy).
     if hasattr(strategy, "export_chat_logs"):
         try:
             strategy.export_chat_logs(log_dir)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - display warning but continue
             print(f"[warn] failed to export conversation logs: {exc}")
 
     print(f"\nLogs & chart saved to: {log_dir.resolve()}")

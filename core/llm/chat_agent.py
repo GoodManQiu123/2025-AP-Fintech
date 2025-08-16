@@ -1,12 +1,18 @@
-"""OpenAI chat wrapper with hyperparameters, JSON mode, and full conversation export.
+"""OpenAI chat wrapper with hyperparameters, JSON mode, and full export.
 
 This module centralizes:
-  - A lightweight, stateful chat client (adjustable context window).
-  - Global/per-call hyperparameters (temperature, top_p, penalties, max_tokens, seed, stop).
-  - Strict JSON mode using typed `ResponseFormatJSONObject`.
-  - Complete conversation capture and rich, per-turn metadata export.
+  * A lightweight, stateful chat client (adjustable context window).
+  * Global/per-call hyperparameters (temperature, top_p, penalties, max_tokens,
+    seed, stop).
+  * Strict JSON mode using typed ``ResponseFormatJSONObject``.
+  * Complete conversation capture and per-turn metadata export.
 
-Requires: openai >= 1.0.0
+Requirements:
+    openai >= 1.0.0
+
+Design notes:
+    * This refactor adjusts only formatting, naming consistency, and docstrings
+      to align with the Google Python Style Guide. Behavior is unchanged.
 """
 from __future__ import annotations
 
@@ -21,41 +27,48 @@ from openai.types import ResponseFormatJSONObject
 
 
 # --------------------------------------------------------------------------- #
-#                                  Data types                                  #
+#                                  Data types                                 #
 # --------------------------------------------------------------------------- #
 @dataclass(slots=True)
 class ChatMessage:
-    """Simple container mirroring the OpenAI chat schema."""
+    """Simple container mirroring the OpenAI chat schema.
 
-    role: str  # "system" | "user" | "assistant"
+    Attributes:
+        role: One of "system", "user", or "assistant".
+        content: Message content text.
+    """
+
+    role: str
     content: str
 
     def as_dict(self) -> Dict[str, str]:
+        """Return a serializable dict in the OpenAI message shape."""
         return {"role": self.role, "content": self.content}
 
 
 # --------------------------------------------------------------------------- #
-#                                  ChatAgent                                   #
+#                                   ChatAgent                                 #
 # --------------------------------------------------------------------------- #
 class ChatAgent:
     """Stateful chat wrapper with hyperparameters, JSON mode, and full logging.
 
     Example:
-      agent = ChatAgent(
-          system_prompt="You are a JSON-only assistant.",
-          model="gpt-4o-mini",
-          json_mode=True,
-          temperature=0.2,
-          max_tokens=200,
-          verbose=True,
-      )
-      reply = agent.send('{"task":"decide"}')
+        agent = ChatAgent(
+            system_prompt="You are a JSON-only assistant.",
+            model="gpt-4o-mini",
+            json_mode=True,
+            temperature=0.2,
+            max_tokens=200,
+            verbose=True,
+        )
+        reply = agent.send('{"task":"decide"}')
 
     Notes:
-      - `json_mode=True` enforces JSON output via typed response_format.
-      - Per-call overrides are supported: `agent.send(msg, temperature=0.0, max_tokens=64)`.
-      - Use `export_dialog_json()` for a minimal message dump,
-        and `export_full_json()` for complete experiment metadata.
+        * ``json_mode=True`` enforces JSON output via typed response_format.
+        * Per-call overrides are supported, e.g.:
+          ``agent.send(msg, temperature=0.0, max_tokens=64)``.
+        * Use ``export_dialog_json()`` for a minimal message dump, and
+          ``export_full_json()`` for complete turn-level metadata.
     """
 
     # ------------------------------- lifecycle ------------------------------ #
@@ -65,13 +78,13 @@ class ChatAgent:
         *,
         model: str = "gpt-4o-mini",
         api_key: Optional[str] = None,
-        # context window
+        # Context window (trimmed message count including system).
         max_history: int = 20,
-        # console echo
+        # Console echo of prompts and replies.
         verbose: bool = True,
-        # JSON mode
+        # JSON mode (typed response_format).
         json_mode: bool = True,
-        # default hyperparameters
+        # Default hyperparameters (overridable per-call).
         temperature: float = 0.2,
         top_p: float = 1.0,
         frequency_penalty: float = 0.0,
@@ -79,26 +92,45 @@ class ChatAgent:
         max_tokens: int = 256,
         seed: Optional[int] = None,
         stop: Optional[List[str]] = None,
-        # optional HTTP headers
+        # Optional HTTP headers for the client.
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> None:
+        """Initialize a ChatAgent.
+
+        Args:
+            system_prompt: First "system" message that frames the assistant.
+            model: OpenAI model name.
+            api_key: API key; defaults to ``OPENAI_API_KEY`` env var.
+            max_history: Max messages kept in the trimmed context (>=3).
+            verbose: Whether to echo user/assistant messages to stdout.
+            json_mode: If True, sets ``response_format={"type":"json_object"}``.
+            temperature: Sampling temperature.
+            top_p: Nucleus sampling parameter.
+            frequency_penalty: Frequency penalty.
+            presence_penalty: Presence penalty.
+            max_tokens: Maximum completion tokens to request.
+            seed: Optional sampling seed.
+            stop: Optional list of stop strings.
+            extra_headers: Optional HTTP headers passed to the client.
+        """
         self._client = OpenAI(
             api_key=api_key or os.getenv("OPENAI_API_KEY"),
             default_headers=extra_headers or None,
         )
 
-        # histories
-        self._messages: List[ChatMessage] = [ChatMessage("system", system_prompt)]
-        self._full_history: List[ChatMessage] = [ChatMessage("system", system_prompt)]
+        # Histories (trimmed vs. full).
+        system_msg = ChatMessage("system", system_prompt)
+        self._messages: List[ChatMessage] = [system_msg]
+        self._full_history: List[ChatMessage] = [system_msg]
         self._turn_records: List[Dict[str, Any]] = []
 
-        # config
+        # Config.
         self._model = model
         self._max_history = max(3, int(max_history))
         self._verbose = verbose
         self._json_mode = bool(json_mode)
 
-        # defaults (overridable per-call)
+        # Defaults (overridable per-call via send()).
         self._defaults: Dict[str, Any] = {
             "temperature": float(temperature),
             "top_p": float(top_p),
@@ -111,25 +143,38 @@ class ChatAgent:
 
     # ------------------------------- core API -------------------------------- #
     def send(self, user_msg: str, **overrides: Any) -> str:
-        """Send a user message and return the assistant text reply."""
-        # Update histories
+        """Send a user message and return the assistant's text reply.
+
+        Args:
+            user_msg: The message to send as the "user".
+            **overrides: Per-call overrides for hyperparameters or ``json_mode``.
+
+        Returns:
+            Assistant text content (empty string on extraction failure).
+
+        Raises:
+            RuntimeError: If the OpenAI API call fails.
+        """
+        # Update histories.
         user = ChatMessage("user", user_msg)
         self._messages.append(user)
         self._full_history.append(user)
         self._trim_history()
 
-        # Prepare payload & params
+        # Prepare request payload.
         payload_messages = [m.as_dict() for m in self._messages]
         req = self._merge_params(overrides)
 
-        # Typed response_format per JSON mode (or NotGiven)
+        # Typed response_format per JSON mode (or NotGiven).
         rf: ResponseFormatJSONObject | NotGiven = NOT_GIVEN
         json_mode_override = overrides.get("json_mode", None)
-        json_mode = bool(json_mode_override) if json_mode_override is not None else self._json_mode
+        json_mode = (
+            bool(json_mode_override) if json_mode_override is not None else self._json_mode
+        )
         if json_mode:
             rf = ResponseFormatJSONObject(type="json_object")
 
-        # Call OpenAI
+        # Call OpenAI.
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
@@ -146,20 +191,20 @@ class ChatAgent:
         except OpenAIError as exc:
             raise RuntimeError(f"OpenAI API error: {exc}") from exc
 
-        # Extract content
+        # Extract content.
         content = ""
         try:
             content = response.choices[0].message.content or ""
         except Exception:
             content = ""
 
-        # Update histories
+        # Update histories with assistant reply.
         assistant = ChatMessage("assistant", content)
         self._messages.append(assistant)
         self._full_history.append(assistant)
         self._trim_history()
 
-        # Capture usage/metadata
+        # Capture usage/metadata (best-effort).
         usage: Dict[str, Optional[int]] = {}
         try:
             usage = {
@@ -170,6 +215,7 @@ class ChatAgent:
         except Exception:
             usage = {}
 
+        # Record this turn.
         self._turn_records.append(
             {
                 "request": {
@@ -206,7 +252,15 @@ class ChatAgent:
 
     # ----------------------------- helpers ---------------------------------- #
     def _merge_params(self, overrides: Dict[str, Any]) -> Dict[str, Any]:
-        """Merge defaults with per-call overrides (with light validation)."""
+        """Merge defaults with per-call overrides (with light validation).
+
+        Args:
+            overrides: Keys among temperature, top_p, frequency_penalty,
+                presence_penalty, max_tokens, seed, stop, json_mode.
+
+        Returns:
+            A merged parameter dictionary.
+        """
         merged: Dict[str, Any] = dict(self._defaults)
         for key in (
             "temperature",
@@ -231,33 +285,49 @@ class ChatAgent:
         return merged
 
     def _trim_history(self) -> None:
-        """Keep inference history ≤ max_history (preserve first system message)."""
+        """Limit trimmed history to ``max_history`` while preserving system(0)."""
         excess = len(self._messages) - self._max_history
         if excess > 0:
             del self._messages[1 : 1 + excess]
 
     # ------------------------------ mutation -------------------------------- #
     def set_params(self, **kwargs: Any) -> None:
-        """Update default hyperparameters for future `send()` calls."""
+        """Update default hyperparameters for future ``send()`` calls."""
         self._defaults.update(self._merge_params(kwargs))
 
     def set_json_mode(self, enabled: bool) -> None:
-        """Toggle JSON mode globally."""
+        """Toggle JSON mode globally.
+
+        Args:
+            enabled: True to enable JSON mode; False for plain text.
+        """
         self._json_mode = bool(enabled)
 
     def set_verbose(self, enabled: bool) -> None:
-        """Toggle console echo globally."""
+        """Toggle console echo globally.
+
+        Args:
+            enabled: True to echo prompts/replies; False to silence.
+        """
         self._verbose = bool(enabled)
 
     # ------------------------------- exports -------------------------------- #
     def export_dialog_json(self, path: str | os.PathLike) -> None:
-        """Export ONLY the full conversation as a JSON array of messages."""
+        """Export only the full conversation as a JSON array of messages.
+
+        Args:
+            path: Destination file path.
+        """
         data = [m.as_dict() for m in self._full_history]
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     def export_full_json(self, path: str | os.PathLike) -> None:
-        """Export complete metadata: config, per-turn snapshots, and full history."""
+        """Export config, per-turn snapshots, and conversation to JSON.
+
+        Args:
+            path: Destination file path.
+        """
         blob: Dict[str, Any] = {
             "model": self._model,
             "config": {
