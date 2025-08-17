@@ -1,4 +1,4 @@
-"""AIStrategy3 — JSON-native, LLM-driven trading with guardrails and scaling.
+"""AIStrategy2 — JSON-native, LLM-driven trading with guardrails and scaling.
 
 This module defines a strategy that delegates decision-making to a Large
 Language Model (LLM) via `ChatAgent`. The model receives a compact JSON
@@ -140,7 +140,7 @@ def _to_int(value: object) -> int:
             return 0
 
 
-class AIStrategy3(Strategy):
+class AIStrategy2(Strategy):
     """LLM strategy with JSON-only I/O, retry-once, scaling, and hard guardrails.
 
     This class mirrors cash/position locally to inform prompts and enforce
@@ -604,9 +604,9 @@ def build(**kwargs) -> Strategy:
     """Factory function returning a configured strategy instance.
 
     Args:
-        **kwargs: Keyword arguments forwarded to `AIStrategy3`.
+        **kwargs: Keyword arguments forwarded to `AIStrategy2`.
 
     Returns:
-        A `Strategy` instance wrapping `AIStrategy3`.
+        A `Strategy` instance wrapping `AIStrategy2`.
     """
-    return AIStrategy3(**kwargs)
+    return AIStrategy2(**kwargs)
