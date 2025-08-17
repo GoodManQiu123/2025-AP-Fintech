@@ -98,7 +98,8 @@ def _build_system_prompt(style: str, *, enable_scaling: bool) -> str:
         else "- Scaling: treat each entry/exit as a single block; avoid frequent partials.\n"
     )
     return (
-        "You are an elite trading agent. Output MUST be ONE LINE of STRICT JSON:\n"
+        "You are a professional trading agent (constantly learning and trading with given prices) "
+        "Output MUST be ONE LINE of STRICT JSON:\n"
         '{"signal":"BUY|SELL|HOLD","units":<int>,"reason":"<short>","feedback":"<1 short sentence>",'
         '"insight":"<short>"}\n'
         "\n"
@@ -604,9 +605,9 @@ def build(**kwargs) -> Strategy:
     """Factory function returning a configured strategy instance.
 
     Args:
-        **kwargs: Keyword arguments forwarded to `AIStrategy2`.
+        **kwargs: Keyword arguments forwarded to `AIStrategy3`.
 
     Returns:
-        A `Strategy` instance wrapping `AIStrategy2`.
+        A `Strategy` instance wrapping `AIStrategy3`.
     """
     return AIStrategy2(**kwargs)

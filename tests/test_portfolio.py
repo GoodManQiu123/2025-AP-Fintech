@@ -9,7 +9,7 @@ def _bar(t: str, price: float) -> MarketData:
 
 
 def test_buy_sell_fifo_and_realised_pnl_and_mark():
-    pf = Portfolio(starting_cash=100.0)
+    pf = Portfolio(start_cash=100.0)
 
     # BUY 5 @ 10 (cash -> 50 left)
     pf.execute(Signal.BUY, _bar("2024-01-01", 10.0), units=5)

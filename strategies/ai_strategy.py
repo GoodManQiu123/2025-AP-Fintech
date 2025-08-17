@@ -73,7 +73,7 @@ class AIStrategy(Strategy):
     def __init__(
         self,
         *,
-        start_cash: float = 10_000.0,
+        start_cash: float = None,
         history_days: Optional[int] = 60,
         metrics_window: int = 20,
         rsi_window: int = 14,

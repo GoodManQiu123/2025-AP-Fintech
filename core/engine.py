@@ -1,28 +1,21 @@
 # core/engine.py
 """Run backtests, pass strategy kwargs directly, and record command line.
 
-This module:
+This script:
   1) Loads market data from CSV.
-  2) Dynamically imports a strategy module and instantiates it via ``build()``.
-     - Strategy-specific CLI params are passed straight through as **kwargs.
-     - If the selected strategy doesn't accept a given param, its constructor
+  2) Dynamically imports a strategy module and instantiates it via build(**kwargs).
+     - All strategy-related CLI params are passed straight through as **kwargs.
+     - If a param is unsupported by the selected strategy, its constructor
        will raise TypeError (intended validation path).
-  3) Streams bars to the strategy and executes trades with a local portfolio.
-  4) Exports summary/logs and (if exposed) strategy conversation logs.
-  5) Prepends the exact command line to the beginning of ``trade.log``.
+  3) Streams bars to the strategy, executes trades via a local portfolio,
+     and marks to market each bar.
+  4) Exports summary/logs and (if available) strategy conversation logs.
+  5) Prepends the exact command line to the beginning of trade.log.
 
-CLI notes:
-  * This script exposes the **main** knobs of the three strategies in this repo:
-      - strategies.threshold_strategy.AdaptiveThresholdStrategy
-          --lookback, --buy-pct, --sell-pct
-      - strategies.ai_strategy.AIStrategy
-          --history-days, --metrics-window, --rsi-window, --verbose-llm, --max-units
-      - strategies.ai_strategy2.AIStrategy2
-          --style, --enable-scaling, --short-win, --long-win, --rsi-win,
-          --max-units, --history-days, --cooldown-bars-after-trade,
-          --model, --temperature, --top-p, --frequency-penalty,
-          --presence-penalty, --max-tokens, --json-mode,
-          --max-history, --verbose-llm, --retry-on-parse-error
+Notes:
+  * Keep engine minimal—no parameter mapping tables or external validation.
+  * CLI boolean-like options are intentionally left as provided (e.g. "true"/"false");
+    strategies should validate/convert as needed.
 """
 from __future__ import annotations
 
@@ -46,18 +39,18 @@ def _cmdline_str() -> str:
 
 
 def _append_command_to_trade_log(log_dir: Path, cmdline: str) -> None:
-    """Prepend the exact command line to 'trade.log' (after export)."""
+    """Prepend the exact command line to 'trade.log' (after export if present)."""
     trade_log_path = log_dir / "trade.log"
     if not trade_log_path.exists():
         return
     original = trade_log_path.read_text(encoding="utf-8", errors="replace")
-    header = [
+    header_lines = [
         "========== Command Line ==========",
         cmdline,
         "==================================",
-        "\n",
+        "",
     ]
-    trade_log_path.write_text("\n".join(header) + original, encoding="utf-8")
+    trade_log_path.write_text("\n".join(header_lines) + original, encoding="utf-8")
 
 
 def _load_strategy_module(dotted_path: str):
@@ -70,10 +63,10 @@ def _load_strategy_module(dotted_path: str):
 
 # ────────────────────────────────────────── CLI ───────────────────────────────────────────
 def _build_parser() -> argparse.ArgumentParser:
-    """Create the CLI parser with engine + three-strategy core options."""
+    """Create the CLI parser with engine options and common strategy knobs."""
     p = argparse.ArgumentParser(description="Run trading back-test.")
 
-    # Engine (data/run) options
+    # Engine (data/run) options.
     p.add_argument("--asset", default="AAPL", help="Asset symbol (e.g., AAPL).")
     p.add_argument("--data-dir", default="data", help="Directory containing CSV data files.")
     p.add_argument(
@@ -81,7 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="strategies.threshold_strategy",
         help="Dotted path to the strategy module exposing build().",
     )
-    p.add_argument("--cash", type=float, default=10_000.0, help="Starting cash for the portfolio.")
+    p.add_argument("--start-cash", type=float, default=10_000.0, help="Starting cash for the portfolio.")
     p.add_argument(
         "--entry-date",
         help=(
@@ -90,19 +83,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    # Threshold strategy
+    # Threshold strategy (AdaptiveThresholdStrategy).
     p.add_argument("--lookback", type=int, default=None, help="[threshold] lookback bars")
     p.add_argument("--buy-pct", type=float, default=None, help="[threshold] buy threshold fraction (e.g., 0.02)")
     p.add_argument("--sell-pct", type=float, default=None, help="[threshold] sell threshold fraction (e.g., 0.02)")
 
-    # AIStrategy (v1)
+    # AIStrategy (v1).
     p.add_argument("--history-days", type=int, default=None, help="[ai_strategy] warm-up history size")
     p.add_argument("--metrics-window", type=int, default=None, help="[ai_strategy] SMA/vol window")
     p.add_argument("--rsi-window", type=int, default=None, help="[ai_strategy] RSI window")
     p.add_argument("--verbose-llm", type=str, default=None, help="[ai_strategy/ai_strategy2] 'true' or 'false'")
     p.add_argument("--max-units", type=int, default=None, help="[ai_strategy/ai_strategy2] max units (cap/per action)")
 
-    # AIStrategy2 (v2)
+    # AIStrategy2 (v2).
     p.add_argument("--style", type=str, default=None, help="[ai_strategy2] style (scalp/swing/invest/free_high/conservative)")
     p.add_argument("--enable-scaling", type=str, default=None, help="[ai_strategy2] 'true' or 'false'")
     p.add_argument("--short-win", type=int, default=None, help="[ai_strategy2] short window")
@@ -131,54 +124,32 @@ def _parse_cli() -> argparse.Namespace:
 def run() -> None:
     """Run the backtest loop and export summary/logs."""
     args = _parse_cli()
+
+    # Resolve data path.
     csv_path = Path(args.data_dir) / f"{args.asset.upper()}.csv"
     if not csv_path.exists():
         sys.exit(f"Data file not found: {csv_path}")
 
-    # Build strategy kwargs by *directly* collecting all explicitly provided
-    # strategy-related args (value is not None). No external validation table.
-    raw_kwargs: Dict[str, Any] = {
-        # threshold
-        "lookback": args.lookback,
-        "buy_pct": args.buy_pct,
-        "sell_pct": args.sell_pct,
-        # ai_strategy
-        "history_days": args.history_days,
-        "metrics_window": args.metrics_window,
-        "rsi_window": args.rsi_window,
-        "verbose_llm": args.verbose_llm,
-        "max_units": args.max_units,
-        # ai_strategy2
-        "style": args.style,
-        "enable_scaling": args.enable_scaling,
-        "short_win": args.short_win,
-        "long_win": args.long_win,
-        "rsi_win": args.rsi_win,
-        "cooldown_bars_after_trade": args.cooldown_bars_after_trade,
-        "model": args.model,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "frequency_penalty": args.frequency_penalty,
-        "presence_penalty": args.presence_penalty,
-        "max_tokens": args.max_tokens,
-        "json_mode": args.json_mode,
-        "max_history": args.max_history,
-        "retry_once_on_parse_error": args.retry_on_parse_error,
+    # Collect strategy kwargs by removing engine-level keys and None values.
+    # argparse already converts `--kebab-case` into `snake_case` attributes,
+    # so we can pass them straight through.
+    engine_keys = {"asset", "data_dir", "strategy", "entry_date"}
+    strategy_kwargs: Dict[str, Any] = {
+        k: v for k, v in vars(args).items() if k not in engine_keys and v is not None
     }
-    # Keep only keys that the user *explicitly* provided (not None). This keeps engine simple.
-    strategy_kwargs = {k: v for k, v in raw_kwargs.items() if v is not None}
 
-    # Import strategy module and instantiate via build(**kwargs).
+    # Import strategy and instantiate via build(**kwargs). Let the strategy
+    # validate unsupported/ill-typed kwargs naturally (TypeError on mismatch).
     mod = _load_strategy_module(args.strategy)
     if not hasattr(mod, "build"):
         sys.exit(f"[error] strategy module '{args.strategy}' must expose build()")
-    # Let the strategy constructor do the validation for unsupported kwargs.
+    print(strategy_kwargs)
     strategy = mod.build(**strategy_kwargs)
 
     # Feed and portfolio.
     entry_dt = dt.datetime.fromisoformat(args.entry_date) if args.entry_date else None
     feed = CSVFeed(csv_path, asset=args.asset)
-    portfolio = Portfolio(starting_cash=float(args.cash))
+    portfolio = Portfolio(start_cash=float(args.start_cash))
 
     # Main loop.
     for bar in feed.stream():

@@ -77,14 +77,14 @@ class Portfolio:
     """
 
     # --------------------------------- init ---------------------------------
-    def __init__(self, starting_cash: float = 10_000.0) -> None:
+    def __init__(self, start_cash: float) -> None:
         """Initialize a new portfolio.
 
         Args:
-            starting_cash: Initial cash balance.
+            start_cash: Initial cash balance.
         """
-        self._start_cash = float(starting_cash)
-        self._cash = float(starting_cash)
+        self._start_cash = float(start_cash)
+        self._cash = float(start_cash)
 
         # Open position lots (FIFO) and realized trade records.
         self._lots: List[PositionLot] = []

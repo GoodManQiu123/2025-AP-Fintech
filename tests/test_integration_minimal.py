@@ -14,7 +14,7 @@ def test_minimal_loop_buy_then_sell(make_csv):
     bars = [MarketData(asset="TEST", time=r["time"], close=r["close"]) for r in rows]
 
     strat = build()
-    pf = Portfolio(starting_cash=100.0)
+    pf = Portfolio(start_cash=100.0)
 
     for bar in bars:
         sig = strat.generate_signal(bar)
