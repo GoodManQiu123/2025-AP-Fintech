@@ -51,8 +51,8 @@ _STYLE_GUIDES: Dict[str, str] = {
     "swing": (
         "STYLE=SWING\n"
         "- Objective: hold days–weeks; combine trend and mean reversion.\n"
-        "- Entry bias: in uptrend (short_sma>long_sma) buy pullbacks (zscore<-1);\n"
-        "  in downtrend (short_sma<long_sma) sell/trim on rebounds (zscore>1).\n"
+        # "- Entry bias: in uptrend (short_sma>long_sma) buy pullbacks (zscore<-1);\n"
+        # "  in downtrend (short_sma<long_sma) sell/trim on rebounds (zscore>1).\n"
         "- Risk: scale in/out; reduce trades when signals conflict.\n"
     ),
     "invest": (
@@ -91,25 +91,20 @@ def _build_system_prompt(style: str, *, enable_scaling: bool) -> str:
     """
     guide = _STYLE_GUIDES.get(style, _STYLE_GUIDES["swing"])
     scaling = (
-        "- Scaling (optional): you may scale in/out across turns (partial BUY/SELL over time). "
+        "- Scaling: you may scale in with multiple buys at lower levels, and scale out with multiple sells at higher "
+        "levels (partial BUY/SELL over time)."
         "When SELLing with a remaining position, you may trim partially. "
         "Do not exceed hard constraints.\n"
         if enable_scaling
         else "- Scaling: treat each entry/exit as a single block; avoid frequent partials.\n"
     )
     return (
-        "You are a professional trading agent (constantly learning and trading with given prices) "
-        "Output MUST be ONE LINE of STRICT JSON:\n"
+        "You are a professional trading agent who continuously receives updated prices and market/portfolio metrics."
+        "Your task is to adopt your decisions based on evolving patterns, and optimize trading, performance over time."
+        "enter and exit at appropriate price levels while making efficient use of available cash and position"
+        "capacity.\n Output MUST be ONE LINE of STRICT JSON:\n"
         '{"signal":"BUY|SELL|HOLD","units":<int>,"reason":"<short>","feedback":"<1 short sentence>",'
         '"insight":"<short>"}\n'
-        "\n"
-        "Metrics each turn:\n"
-        "- price: latest close; short_sma: short moving average of closes;\n"
-        "- long_sma: long moving average; volatility: stddev over short window;\n"
-        "- rsi: Relative Strength Index (0–100) over recent price changes;\n"
-        "- zscore: (price - short_sma) / volatility (stabilized for near-zero vol).\n"
-        "OHLCV may also be provided (open/high/low/close/volume).\n"
-        "\n"
         f"{guide}"
         f"{scaling}"
         "HARD CONSTRAINTS:\n"
@@ -195,7 +190,7 @@ class AIStrategy2(Strategy):
         cooldown_bars_after_trade: int = 0,
         # LLM wiring / hyper-parameters (forwarded to ChatAgent)
         model: str = "gpt-4o-mini",
-        temperature: float = 0.1,
+        temperature: float = 0.2,
         top_p: float = 1.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,

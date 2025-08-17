@@ -1,118 +1,211 @@
-# 06000219-2025-AP-Fintech
-**Real‑Time Machine‑Learning Trading System for High‑Frequency Trading Simulation**
+# Real-Time Machine Learning Trading System for High-Frequency Trading Simulation
 
-*Python 3.10 • Minimal‑Viable Product (MVP)*
-
----
-
-##   Overview
-This repository hosts a modular trading‑simulation engine that streams market data (live feed or CSV replay), hands each tick to a pluggable AI **strategy agent**, and records executions in a lightweight portfolio.  
-The codebase is deliberately small, production‑ready, and follows SOLID/clean‑code principles so you can extend or swap any component—data feeds, strategies, execution logic—without touching the rest.
-
-```
-Data Feed  →  Strategy  →  Portfolio/Execution
-                 ↑
-         (future feedback)
-```
+**Author:** Yongkang Qiu · yq124@ic.ac.uk  
+**Programme:** MSc Financial Technology (2024–2025), Imperial College Business School  
+**Project Type:** Final report — financial software
 
 ---
 
-## 2 Folder Structure
+## 1. Overview
+
+A compact backtesting engine for experimenting with machine‑learning trading ideas.
+
+- **Data Feed** (CSV → `MarketData`)
+- **Strategy** (pluggable module, returns `BUY` / `SELL` / `HOLD`)
+- **Portfolio** (FIFO lots; realised PnL; mark‑to‑market; exports)
+
+```
+CSV Feed  →  Strategy  →  Portfolio (FIFO lots & analytics)
+```
+
+Everything is plain Python; components are small and independent.
+
+---
+
+## 2. Repository Layout
 
 ```
 .
-├── data/                  # Market data snapshots or live adapters
+├── core/
+│   ├── engine.py              # CLI runner: feed → strategy → portfolio
+│   ├── data_feed.py           # CSV → MarketData adapter (alias handling)
+│   ├── portfolio.py           # FIFO lots, PnL, equity/plots, trade.log
+│   ├── metrics.py             # RollingWindow, SMA, stddev, RSI-like
+│   ├── types.py               # Signal enum, MarketData dataclass
+│   ├── strategy_base.py       # Strategy interface
+│   └── llm/
+│       └── chat_agent.py      # OpenAI wrapper (JSON mode, logging/export)
+├── strategies/
+│   ├── threshold_strategy.py  # AdaptiveThresholdStrategy
+│   ├── ai_strategy.py         # AIStrategy (LLM v1)
+│   └── ai_strategy2.py        # AIStrategy2 (LLM v2, JSON-only, guardrails)
+├── data/                      # Example datasets
+│   ├── AAPL.csv
 │   └── sample_prices.csv
-├── core/                  # Framework (feed, types, portfolio, engine)
-├── strategies/            # Plug‑in strategy modules
-├── tests/                 # pytest smoke tests
-├── requirements.txt       # Third‑party deps
+├── logs/                      # Created per run (ASSET_YYYYMMDD_HHMMSS)
+├── tests/                     # Pytest smoke/integration tests
+├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## 3 Quick Start
+## 3. Environment Set‑up (Python 3.10)
 
-### 3.1 Set‑up
+### 3.1 Windows (PowerShell)
 
-```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .\.venv\Scripts\Activate
+```powershell
+# Check Python
+python --version
+
+# Create and activate a virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate
+
+# Upgrade pip and install dependencies
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3.2 Run the demo loop
+### 3.2 macOS / Linux (bash/zsh)
 
 ```bash
-python -m core.engine
+# Check Python
+python3 --version
+
+# Create and activate a virtual environment
+python3 -m venv .venv
+source ./.venv/bin/activate
+
+# Upgrade pip and install dependencies
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-The demo:
+### 3.3 OpenAI key for LLM strategies (optional)
 
-* streams six price ticks from `data/sample_prices.csv`
-* runs the default `ThresholdStrategy`
-* executes simulated trades and prints cash + PnL
+> Temporary test key provided for this project’s assessment. Rotate or unset after use.
 
-### 3.3 Switch strategy (optional)
+```powershell
+# Windows PowerShell
+$Env:OPENAI_API_KEY = "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"
+```
 
 ```bash
-# Bash
-STRATEGY_MOD=strategies.gpt_strategy_placeholder python -m core.engine
+# macOS / Linux
+export OPENAI_API_KEY="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"
 ```
 
-`STRATEGY_MOD` can point to any module that exposes a `build() -> Strategy` factory.
+---
+
+## 4. Data
+
+### 4.1 CSV format
+
+Minimum column: `time` (ISO date or datetime).  
+Optional: `open`, `high`, `low`, `close`, `adj_close`, `volume`.  
+Aliases accepted, e.g. **`Adj Close` → `adj_close`**, **`Vol` → `volume`**.
+
+### 4.2 Download market data (Yahoo Finance)
+
+`core/data_downloader.py` writes a canonical CSV.
+
+```bash
+# Last 365 days (interval 1d)
+python -m core.data_downloader AAPL --days 365 --interval 1d --out data/AAPL.csv
+
+# Date range
+python -m core.data_downloader AAPL --start 2024-01-01 --end 2024-12-31 --interval 1d --out data/AAPL.csv
+
+# Adjusted prices
+python -m core.data_downloader AAPL --days 365 --interval 1d --auto-adjust --out data/AAPL.csv
+```
+
+Output columns: `asset,time,open,high,low,close,adj_close,volume`.
 
 ---
 
-## 4 Components
+## 5. Run a Backtest
 
-| Module | Key Classes | Notes |
-|--------|-------------|-------|
-| **core.data_feed** | `BaseFeed`, `CSVFeed` | Stream `MarketData` objects. Add `BinanceFeed`, `AlpacaFeed`, … later. |
-| **core.strategy_base** | `Strategy` (ABC) | Contract: `generate_signal(tick) -> Signal`. |
-| **strategies.threshold_strategy** | `ThresholdStrategy` | Simple BUY/SELL thresholds—good for smoke tests. |
-| **strategies.gpt_strategy_placeholder** | `GPTStrategy` | Skeleton showing where to call OpenAI; returns dummy signals for now. |
-| **core.portfolio** | `Portfolio`, `Trade` | Tracks cash, open position, realised PnL. |
-| **core.engine** | `run()` | Wires feed → strategy → portfolio. |
+### 5.1 Engine flags
+
+```bash
+python -m core.engine --asset AAPL --data-dir data --strategy strategies.threshold_strategy   --start-cash 10000 --entry-date 2024-01-01
+```
+
+- `--asset`: looks for `data/<ASSET>.csv`
+- `--data-dir`: CSV directory
+- `--strategy`: dotted import path exposing `build(**kwargs)`
+- `--start-cash`: initial cash for the portfolio
+- `--entry-date`: bars **before** this date are observed only (warm‑up)
+
+### 5.2 Strategy parameters
+
+Any **extra** flags are forwarded as `**kwargs` to the strategy’s `build(**kwargs)` (dashes → underscores). If a kwarg is not accepted, Python raises `TypeError` on start.
+
+#### Threshold
+
+```bash
+python -m core.engine --strategy strategies.threshold_strategy   --asset AAPL --data-dir data   --lookback 30 --buy-pct 0.02 --sell-pct 0.02
+```
+
+#### AI v1
+
+```bash
+python -m core.engine --strategy strategies.ai_strategy   --asset AAPL --data-dir data --start-cash 20000   --history-days 60 --metrics-window 20 --rsi-window 14   --verbose-llm true --max-units 10
+```
+
+#### AI v2
+
+```bash
+python -m core.engine --strategy strategies.ai_strategy2   --asset AAPL --data-dir data --start-cash 20000   --style swing --enable-scaling true   --short-win 10 --long-win 30 --rsi-win 14   --max-units 500 --history-days 180 --cooldown-bars-after-trade 0   --model gpt-4o-mini --temperature 0.1 --top-p 1.0   --frequency-penalty 0.0 --presence-penalty 0.0 --max-tokens 120   --json-mode true --max-history 64 --verbose-llm true --retry-on-parse-error true
+```
+
+### 5.3 Outputs
+
+Each run writes to `logs/<ASSET_YYYYMMDD_HHMMSS>/`:
+
+- `trade.log` — portfolio summary + trade list; **first lines show the exact command line**
+- `trades.png` — price + BUY/SELL markers
+- (console also prints the summary and trade log)
 
 ---
 
-## 5 Extending the MVP
+## 6. Strategies (what the engine calls)
 
-| Task | How |
-|------|-----|
-| **Live data** | Sub‑class `BaseFeed` and override `stream()`. |
-| **New strategy** | Derive from `Strategy`; implement `generate_signal`. |
-| **GPT integration** | In a new strategy, call `openai.ChatCompletion` and map model text to BUY/SELL/HOLD. |
-| **Risk controls** | Enrich `Portfolio.execute()` with position limits, slippage, VaR checks. |
-| **Metrics & dashboards** | Add exporters (Prometheus), write logs to CSV/SQLite, or visualize with Plotly Dash. |
+```python
+class Strategy(ABC):
+    def generate_signal(self, bar: MarketData) -> Signal: ...
+    def observe(self, bar: MarketData) -> None:  # optional
+        pass
+```
+- `MarketData` (`core/types.py`) exposes `.price` (prefers `close`, then `adj_close`).
+- `Signal` is an enum: `BUY`, `SELL`, `HOLD`.
+
+Bundled implementations:
+- `strategies/threshold_strategy.py` — AdaptiveThresholdStrategy
+- `strategies/ai_strategy.py` — AIStrategy (LLM v1)
+- `strategies/ai_strategy2.py` — AIStrategy2 (LLM v2; JSON‑only, scaling, guardrails; uses `core/llm/chat_agent.py`)
 
 ---
 
-## 6 Testing
-
-A minimal `pytest` smoke test lives in `tests/test_engine.py`.  
-Run:
+## 7. Tests
 
 ```bash
 pytest -q
 ```
-
-to verify the main loop executes without errors.
-
----
-
-## 7 Roadmap
-
-1. **Core latency tune‑up** – replace CSV replay with async WebSocket feed.  
-2. **AI strategy evolution** – swap demo strategy for a GPT‑driven class.  
-3. **Automated feedback loop** – score strategy PnL → call GPT to adjust params.  
-4. **Robust evaluation** – run Monte‑Carlo shocks, tail‑risk metrics (VaR/CVaR).  
+Covers metrics, portfolio, CSV feed aliasing, end‑to‑end engine run with a dummy strategy, and a chat‑agent export smoke test (skips if `openai` is missing).  
+Windows tip (for subprocess encoding): `setx PYTHONIOENCODING utf-8`.
 
 ---
 
-## 8 License
+## 8. Marker Notes
 
-MIT – feel free to fork, modify, and build on top.  
-If you use this in academic work, cite the repository.
+- The engine forwards unknown CLI flags **directly** to `build(**kwargs)`; unsupported flags raise `TypeError` at init (single source of truth in the strategy).
+- `trade.log` begins with the **full command line** for reproducibility.
 
+---
+
+## 9. License
+
+MIT
