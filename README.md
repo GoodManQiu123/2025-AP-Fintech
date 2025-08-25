@@ -88,12 +88,12 @@ pip install -r requirements.txt
 
 ```powershell
 # Windows PowerShell
-$Env:OPENAI_API_KEY = "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"
+$Env:OPENAI_API_KEY = "YOUR_API_KEY_HERE"
 ```
 
 ```bash
 # macOS / Linux
-export OPENAI_API_KEY="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"
+export OPENAI_API_KEY="YOUR_API_KEY_HERE"
 ```
 
 ---
