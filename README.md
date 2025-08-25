@@ -84,7 +84,7 @@ pip install -r requirements.txt
 
 ### 3.3 OpenAI key for LLM strategies (optional)
 
-> Temporary test key provided for this project’s assessment. Rotate or unset after use.
+> Sign up at [platform.openai.com](https://platform.openai.com/) and create an API key.
 
 ```powershell
 # Windows PowerShell
