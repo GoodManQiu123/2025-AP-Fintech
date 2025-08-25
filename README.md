@@ -1,6 +1,5 @@
 # Real-Time Machine Learning Trading System for High-Frequency Trading Simulation
 
-**Author UID:** 06000219  
 **Programme:** MSc Financial Technology (2024–2025), Imperial College Business School  
 **Project Type:** Final report — financial software
 
